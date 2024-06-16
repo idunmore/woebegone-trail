@@ -1,0 +1,19 @@
+General Notes:
+
+  Placeholder files to get project folders created, committed, and the project
+  definitions/settings in place to verify structure, environmnet, tools and
+  that the code assembles.
+
+<------------------------------------------------------------------------------>
+
+Includes & Dependencies:
+
+  This game uses my "atari-8-bit-includes-mads" project as a GIT SUBPROJECT to
+  provide various hardware register, bit settings, values and macros.
+
+  Commits and pulls to/from this subproject must be handled separately; they
+  will not automatically update with upstream changes.
+  
+<------------------------------------------------------------------------------>
+
+TODOs:
