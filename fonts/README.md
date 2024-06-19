@@ -4,7 +4,8 @@ Various custom fonts (character sets) are used within the game; some for actual 
 ### My Fonts
 These fonts are my own creations.  I use several tools for creating them ([Pixaki](https://pixaki.com), [Photoshop](https://www.adobe.com/products/photoshop.html?promoid=RBS7NL7F&mv=other) and [GIMP](https://www.gimp.org) primarily).  In general, I will keep the original source file, a .GIF version and the final .FNT files here, so they can easily be edited and/or used:
 
-
+- **clouds.fnt** - A provisional font for character-graphic based clouds for ANTIC Mode 4 display.
+  
 
 #### Font Tools
 
@@ -15,6 +16,6 @@ I have created tools for converting image (.GIF and .PNG) to .FNT files ([image2
 
 ### Fonts by Others
 
-**"high_noon.fnt"** - This custom wood-stamp/burn style font, called "[High Noon](https://damieng.com/typography/zx-origins/high-noon/)" was created by "[Damien G.](https://damieng.com)".
+**high_noon.fnt** - This custom wood-stamp/burn style font, called "[High Noon](https://damieng.com/typography/zx-origins/high-noon/)" was created by "[Damien G.](https://damieng.com)".
 
 Damien has made hundreds of excellent fonts available, in multiple formats (including Atari .FNT files), on his [typography page](https://damieng.com/typography/zx-origins/), [here](https://damieng.com/typography/zx-origins/), and is gracious and generous enough to allow them to be used with just a mention in the game's credits.
