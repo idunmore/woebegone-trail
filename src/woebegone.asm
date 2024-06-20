@@ -19,6 +19,9 @@
         ; Program Entry Point
         org $2000
 
+        icl 'title.asm'
+
         ; For now, do nothing and keep doing it.
-start
-        jmp start
+                
+;iloop
+        ;jmp iloop
