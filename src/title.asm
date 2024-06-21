@@ -20,12 +20,18 @@
 ;       the original "technique tests" for the title/travel screen moved to
 ;       the real woebegone project.
 
+; Time-Critical PAGE ZERO variables
+
+DLI_TABLE_IDX = $0090	; !! PAGE ZERO !! DLI Color Table Index
+                        ; We put this in page zero to save cycles as page zero
+			; access is faster than page 6 access.  This saves
+			; enough time for HSCROL on DLI lines without beam ovverun.
+
 ; Variables stuffed in Page 6 for now.
 COLOR_FLOW_LINE = $0600
 COLOR_FLOW_TOP =  $0601
 
 SCR_IDX = 	$0602	; Scroll Index
-DLI_TABLE_IDX = $0603	; DLI Color Table Index
 
 CLOUD_POS = 	$0604	; Cloud Position
 CLOUD_REDUCER = $0605	; Counter for Reducing Cloud Updates
