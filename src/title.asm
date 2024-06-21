@@ -12,8 +12,7 @@
 	icl '../include/GTIA.asm'
 	;icl '../include/OS.asm'
 	icl '../include/character_set.asm'
-	icl '../include/display_list.asm'
-	icl '../include/math.asm'
+	icl '../include/display_list.asm'	
 	icl '../include/vertical_blank.asm'
 
 ; TODO: This is a quick-and-dirty title screen, switched to use the macros in
@@ -128,11 +127,11 @@ vert_isr
 	bne	cont
 	
 	; Update the LMS address to coarse scroll
-	AddByteToWord scroll_lms, $02	; Two bytes per coarse scroll in Mode 7
+	adw 	scroll_lms #$02	; Two bytes per coarse scroll in Mode 7
 		
 	; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
-	AddByteToWord cst_lms, $04	; Four byets per coarse scroll in Mode 4
-	AddByteToWord csb_lms, $04
+	adw	 cst_lms #$04	; Four byets per coarse scroll in Mode 4
+	adw	 csb_lms #$04
 
 	; Reset the smooth scroll location
 	sec
