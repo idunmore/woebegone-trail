@@ -32,7 +32,8 @@ CLOUD_REDUCER = $0605	; Counter for Reducing Cloud Updates
 
 
 start
-	; Use our custom character set
+	; Use our custom character set; which since we're using the shadow
+	; register to do it, will be reset automatically in the VBI
 	SetCharacterSet charset
 	
 	; Set Background Color		
@@ -70,12 +71,7 @@ start
 	sta	GRACTL
 	lda	#62
 	sta	SDMCTL
-	
-	; Setup DLI
-	lda	#$00		; Initial Color Table Index
-	sta	DLI_TABLE_IDX   ; Reset the Index for the DLI
-	SetDLI  dl_isr
-			
+					
 	; Install our display list
 	InstallDisplayList title_display_list
 	
@@ -104,19 +100,25 @@ lp
 	; Vertical Blank Interrupt Service Routine
 
 vert_isr
-	;Color Cycling Index Points for VENETIAN scrolling
-	ldx	COLOR_FLOW_TOP
-	inx
-	stx	COLOR_FLOW_TOP
+	; Setup the FIRST DLI here in the VBI so we know it will be the
+	; first DLI to be called when the frame is drawn.
+
+	lda	#$00		; First we initialize the color lookup index
+	sta	DLI_TABLE_IDX
+	SetDLI  dl_set_clouds	; Then we set the first DLI, which changes
+				; the character set to the clouds.
+	
+	;Color Cycling Index Points for COLOR FLOW color scrolling
+	inc     COLOR_FLOW_TOP
+	ldx     COLOR_FLOW_TOP
 	stx	COLOR_FLOW_LINE	
 				
-	; Do Scrolling
+	; Do Smooth Scrolling
 	lda	SCR_IDX
 	cmp	#$0
 	bne	cont
 	
-	; Update the LMS address to coarse scroll
-	
+	; Update the LMS address to coarse scroll	
 	clc	
 	lda	scroll_lms
 	adc	#$02
@@ -127,8 +129,7 @@ vert_isr
 	
 	; Reset the smooth scroll location
 	sec
-	lda	#$10	
-		
+	lda	#$10		
 cont
 	sbc	#$01
 	sta	SCR_IDX
@@ -150,10 +151,7 @@ cont
 	sta	scroll_lms + 1		
 
 do_not_reset_scroller		
-		
-	; Reset the Table Lookup Index for our DLI
-	lda	#$00
-	sta	DLI_TABLE_IDX
+			
 	
 	; Update the position of the cloud, every 8th frame
 	inc	cloud_reducer
@@ -170,56 +168,59 @@ skip_cloud
 			
 exit_vb	
 	ExitDeferredVBI
-			
 
-	; Display List Interrupt Service Routine
+; Display List Interrupt Service Routines
+;
+; These are broken out into short, simple, routines, to minimize DLI execution
+; time for any one scan line or mode line.		
+
+dl_set_clouds
+	; Set the character set to the clouds
+	pha
+	SetCharacterSet cloud_chars, TRUE
+	ChainDLI dl_isr, dl_set_clouds ; Next do the color-update DLI
+
+dl_set_chars
+	; Set the character set to the text
+	pha
+	SetCharacterSet charset, TRUE
+	ChainDLI dl_set_colors, dl_set_chars ; Next to the fixed colors DLI
+
+dl_set_colors
+	; Set the colors for the remainder of the screen
+	pha
+	lda	#$26
+	sta	COLPF0
+	lda	#$46
+	sta	COLPF1
+	pla
+	rti
 
 dl_isr	
-	; This routine runs too slowly.  Fixing it probably requires doing
-	; DLI chaining so that we're only changing colors in one routine,
-	; and character sets in another - rather than trying to conditionalize
-	; both and get them done in one scan line.
+	; Changes the background color based on a table of colors and the
+	; DLI_TABLE_IDX value.  It runs once per mode line, for 9 mode lines,
+	; then chains the next DLI, which changes the character set back to
+	; text ready for the status display.
 
 	pha	;Store A and X
 	txa
 	pha
-		
-	; Change the colors first, as this is the most visible change and
-	; we don't want to change an EXTRA scanline after the DLI has been
-	; called as we're already on the last scan line of the mode line.
-
+			
 	ldx	DLI_TABLE_IDX		;Get the NEXT color ...
 	lda	color_table, X		;from the table and
 	sta	WSYNC			;wait for the next scan line
-	sta	COLBK			;to update color register
-
-	; This occurs partway across the screen, so we have an extra blank
-	; scanline in the display list to allow for the character set change
-	; to occur cleanly.
-	SetCharacterSet cloud_chars, TRUE
-
+	sta	COLBK			;to update color register	
 	inc	DLI_TABLE_IDX		;Move to NEXT color in table
 
-	lda	DLI_TABLE_IDX		;IF we're done with the TABLE-driven changes ... reset some values:
-	cmp	#$0B
-	bne	exit_dli
+	lda	DLI_TABLE_IDX		;Last Index/Color?
+	cmp	#$09
+	bne	exit_dli		; If not, exit here ...
 
-	; This occurs partway across the screen, so we have an extra blank
-	; scanline in the display list to allow for the character set change
-	; to occur cleanly.	
-	SetCharacterSet charset, TRUE
-
-	; TODO: These colors should be set once, AFTER we're done with the
-	;       color gradient for the sky/landscape - so will need to be in a
-	;       final, chained, DLI routine:
-
-	;Set colors for remainder of screen
-	 lda	#$26
-	 sta	COLPF0
-	 lda	#$46
-	 sta	COLPF1
+	pla				
+	tax				; ... otherwise, restore X and chain to
+	ChainDLI dl_set_chars, dl_isr	; the next DLI to reset character set
 		
-exit_dli			
+exit_dli
 	pla	;Restore A and X
 	tax
 	pla
@@ -228,14 +229,13 @@ exit_dli
 END:	
 
 		run start
-		
-		
+				
 ; Macro Built Display List
 title_display_list
 		DL_TOP_OVERSCAN
-		DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line
+		DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line ; Change to Clouds Character Set
 		DL_BLANK_LINES	 1
-		DL_MODE		 [DL_TEXT_4 | DL_DLI]
+		DL_MODE		 [DL_TEXT_4 | DL_DLI]	; Change Background Color
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]	
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
@@ -244,8 +244,8 @@ title_display_list
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
-		DL_MODE		 [DL_TEXT_4 | DL_DLI]
-		DL_BLANK_LINES	 1
+		DL_MODE		 [DL_TEXT_4 | DL_DLI]   ; Resets Character Set
+		DL_BLANK	 DL_BLANK_1, TRUE	; Set Final Colors
 		DL_MODE		 DL_TEXT_6
 		DL_MODE		 DL_TEXT_6
 		DL_MODE		 DL_TEXT_6
@@ -302,7 +302,7 @@ blank_line	dta	d'                                        '
 		dta	d'                                        '
 	
 color_table
-		.byte	$75, $75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3, $F3
+		.byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
 
 ; Character SETs ... first for the text ...	
                 AlignCharacterSet
@@ -310,16 +310,16 @@ charset
 		ins '../fonts/high_noon.fnt'
 		
 ; ... and then for the cloud and terrain graphics ...
-		;AlignCharacterSet
-		.align $800 ; Is ALSO a $400 boundary, so works for CHBASE and PMBASE
+		.align PMBASE_BOUNDARY ; PMBASE_BOUNDARY is a 2KB boundary,
+		                       ; which is also a 1KB boundary, so works
+				       ; for character sets.
 
 pm_graphics	; This puts a character set in the first, unused, 1KB of PMBASE 
 cloud_chars     ; so we're not wasting that area.
 		ins '../fonts/clouds.fnt'				
 		
-;.align		$800
-;pm_graphics
-;:1024		.byte $00	;Skip the first 1KB of the PMTable, so we start at PM0.
+		; The inserted character set is 1024 bytes, so here org is at
+		; PMBASE + $400, ready for the first Player data.
 		org *+69	;SKip on 64 bytes
 
 		; "Ugly Cloud"
