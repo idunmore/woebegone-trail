@@ -27,13 +27,14 @@ DLI_TABLE_IDX = $0090	; !! PAGE ZERO !! DLI Color Table Index
 			; access is faster than page 6 access.  This saves
 			; enough time for HSCROL on DLI lines without beam ovverun.
 
-CLOUD_SCROLL_IDX = $0091
+CLOUD_SCROLL_IDX = $0091 ; Cloud Scroll Index
+SCR_IDX = 	   $0092 ; Text Scroll Index
 
 ; Variables stuffed in Page 6 for now.
 COLOR_FLOW_LINE = $0600
 COLOR_FLOW_TOP =  $0601
 
-SCR_IDX = 	$0602	; Scroll Index
+
 
 CLOUD_POS = 	$0604	; Cloud Position
 CLOUD_REDUCER = $0605	; Counter for Reducing Cloud Updates
@@ -88,10 +89,13 @@ start
 	lda	#0
 	sta 	COLOR_FLOW_LINE
 		
-	;Initialize our scroll point
-	lda	#$10
-	sta	HSCROL
+	;Initialize our text scroll point
+	lda	#$10	
 	sta	SCR_IDX
+
+	; Initialize our cloud scroll point
+	lda	#$00
+	sta	CLOUD_SCROLL_IDX
 
 	;Setup VBI (Deferred)
 	SetDeferredVBI vert_isr
@@ -129,19 +133,13 @@ vert_isr
 	; Update the LMS address to coarse scroll
 	adw 	scroll_lms #$02	; Two bytes per coarse scroll in Mode 7
 		
-	; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
-	adw	 cst_lms #$04	; Four byets per coarse scroll in Mode 4
-	adw	 csb_lms #$04
-
 	; Reset the smooth scroll location
 	sec
 	lda	#$10		
 cont
 	sbc	#$01
 	sta	SCR_IDX
-	sta	CLOUD_SCROLL_IDX
-	;sta	HSCROL
-	
+			
 	; RESET THE OVERALL SCROLLER  (Resets when scroll_lms points beyond blank_line
 	lda	scroll_lms + 1
 	cmp	#>blank_line
@@ -160,38 +158,59 @@ cont
 do_not_reset_scroller		
 
 	; RESET the CLOUD Scroller?
-	lda	csb_lms + 1
-	cmp	#>cloud_scroller_end
-	bcc	do_not_reset_cloud_scroller	;Branch if the LMS HIGH pointer is lower than the last page of scroller data.
+	lda	cst_lms + 1
+	cmp	#>cloud_scroller_top
+	bcc	reset_cloud_scroller		; Examine how this yields <= in conjunction with next instruction
+	bne	do_not_reset_cloud_scroller	; Examine how this yields <= in conjunciton with previous instruction
 
-	lda	csb_lms
-	cmp	#<cloud_scroller_end
-	bcc	do_not_reset_cloud_scroller	;Bracnh of the LMS LOW pointer is lower than the last desired byte into the current page
-
-	lda	#<cloud_scroller_top
+	lda	cst_lms
+	cmp	#<cloud_scroller_top
+	bcs	do_not_reset_cloud_scroller	; Don't branch if we're not at, or before, the first address (see above)
+	
+reset_cloud_scroller
+	lda	#<cloud_scroller_top_end
 	sta	cst_lms
-	lda	#>cloud_scroller_top
+	lda	#>cloud_scroller_top_end
 	sta 	cst_lms + 1
 
-	lda	#<cloud_scroller_bottom
+	lda	#<cloud_scroller_bottom_end
 	sta	csb_lms
-	lda	#>cloud_scroller_bottom
+	lda	#>cloud_scroller_bottom_end 
 	sta 	csb_lms + 1
 
 do_not_reset_cloud_scroller
 	
-	; Update the position of the cloud, every 8th frame
+	; Update the position of the clouds, every 8th frame
 	inc	cloud_reducer
 	lda	cloud_reducer
 	cmp	#$08
 	bne	skip_cloud
-	inc	cloud_pos
+	inc	cloud_pos	; Move the PMG cloud 2 pixels to the right
+	inc     cloud_pos
 	lda	#$00
-	sta	cloud_reducer
+	sta	cloud_reducer	
 	
+	; Do CLOUD scrolling
+	lda	CLOUD_SCROLL_IDX
+	cmp	#$0F
+	bne	cont_clouds
+
+	; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
+	sbw	 cst_lms #$04	; Four bytes per coarse scroll in Mode 4
+	sbw	 csb_lms #$04
+
+	; Reset the cloud scroll location
+	lda	#$FF
+	sta	CLOUD_SCROLL_IDX	
+
+cont_clouds
+	clc
+	adc	#$01
+	sta 	CLOUD_SCROLL_IDX
+
 skip_cloud	
 	lda	cloud_pos
-	sta	HPOSP0
+	sta	HPOSP0	
 			
 exit_vb	
 	ExitDeferredVBI
@@ -205,7 +224,7 @@ dl_set_clouds
 	; Set the character set to the clouds
 	pha
 	SetCharacterSet cloud_chars, TRUE
-	lda 	CLOUD_SCROLL_IDX
+	lda 	CLOUD_SCROLL_IDX	
 	sta 	HSCROL
 	ChainDLI dl_isr, dl_set_clouds ; Next do the color-update DLI
 
@@ -269,9 +288,9 @@ title_display_list
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]	; Change Background Color
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]	
 		DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-cst_lms		DL_LMS_ADDR	 cloud_scroller_top
+cst_lms		DL_LMS_ADDR	 cloud_scroller_top_end			; Scrolling LEFT to RIGHT, so start at END of data
 		DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-csb_lms		DL_LMS_ADDR	 cloud_scroller_bottom
+csb_lms		DL_LMS_ADDR	 cloud_scroller_bottom_end		; Scrolling LEFT to RIGHT, so start at END of data
 		DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], main_text
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
@@ -291,19 +310,12 @@ scroll_lms	DL_LMS_ADDR	 scroll_line
 		DL_BLANK_LINES	 8
 		DL_BLANK_LINES 	 8	
 		DL_JVB		 title_display_list	
-		
-		
+				
 ; Data for the Title Screen	
 		
 first_line	dta	d'THE: WOEBEGONE TRAIL'*
 		dta	d'                                        '
-		dta	d'                                        '
-
-		; Two lines of MODE 4 characters for the CLOUDS
-		;.HE 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00
-		;.HE 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57 00
-		;.HE 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00
-		;.HE 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00
+		dta	d'                                        '		
 main_text				
 		dta	d'                                        '
 		dta	d'                                        '
@@ -336,18 +348,14 @@ blank_line	dta	d'                                        '
 
 		; Two lines of MODE 4 characters for the CLOUDS
 cloud_scroller_top
-		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00	
-
+		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57 
+cloud_scroller_top_end
 cloud_scroller_bottom		
-		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-		
+		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
+cloud_scroller_bottom_end
 cloud_scroller_end
-		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00	
-		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00	
-
-
-
+		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 	
+		
 color_table
 		.byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
 
@@ -401,4 +409,3 @@ cloud_chars     ; so we're not wasting that area.
 		; code in it, so we don't show "noise".  (e.g., putting a
 		; loop in woebegone.asm after this code shows up under the sun).
 		
-

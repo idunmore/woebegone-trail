@@ -17,3 +17,24 @@ Includes & Dependencies:
 <------------------------------------------------------------------------------>
 
 TODOs:
+
+  title.asm 
+
+    This is currently very quick/dirty - just testing and proving techniques
+    and working through various timing and sequencing issues.
+
+      * Will require a series of slowly-incrementing counters, with resets
+        PMG and HSCROLL positioning, at 1, 2, 4, 8 and 16 frames per increment.
+
+        These will drive the clouds and other "parallax" elements of the
+        scrolling display.
+
+      * Lots of tidy-up with scrollers and resetting LMS values when scroll
+        limits are reached.
+
+      * Refactor/rename all labels for conditional operatio.
+
+      * Properly comment DLIs and DLIST mode line behavior.
+
+      * PMG for SUN needs to be moved (PMG 2?) so it can have higher priority
+        than the lines of scrolling clouds (clouds must ALWAYS obscure the sun).
