@@ -10,35 +10,31 @@
         icl '../include/common.asm'
 	icl '../include/ANTIC.asm'
 	icl '../include/GTIA.asm'
-	;icl '../include/OS.asm'
 	icl '../include/character_set.asm'
 	icl '../include/display_list.asm'	
 	icl '../include/vertical_blank.asm'
 
-; TODO: This is a quick-and-dirty title screen, switched to use the macros in
-;       the includes folder (instead of explicit 6502 code), and just to get
-;       the original "technique tests" for the title/travel screen moved to
-;       the real woebegone project.
+; TODO: Quick/dirty title screen.  Moves title screen "technique tests" to real
+;       woebegone project. Uses MADS macros and thoses from the "include" folder
+;       (instead of explicit, long-hand, 6502 code).
 
 ; Time-Critical PAGE ZERO variables
 
-DLI_TABLE_IDX = $0090	; !! PAGE ZERO !! DLI Color Table Index
-                        ; We put this in page zero to save cycles as page zero
-			; access is faster than page 6 access.  This saves
-			; enough time for HSCROL on DLI lines without beam ovverun.
+DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
+			 ; on DLI lines without beam ovverun.
 
-CLOUD_SCROLL_IDX = $0091 ; Cloud Scroll Index
-SCR_IDX = 	   $0092 ; Text Scroll Index
+CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
+TEXT_SCROLL_IDX =  $0092 ; Text Smooth-Scroll Index
 
 ; Variables stuffed in Page 6 for now.
-COLOR_FLOW_LINE = $0600
-COLOR_FLOW_TOP =  $0601
 
+; COLOR FLOW variables
+COLOR_FLOW_LINE = $0600	; Current color for the COLOR FLOW scan line
+COLOR_FLOW_TOP =  $0601 ; First color (top scan line) for COLOR FLOW
 
-
-CLOUD_POS = 	$0604	; Cloud Position
-CLOUD_REDUCER = $0605	; Counter for Reducing Cloud Updates
-
+; Cloud PMG Position and cycle counter
+CLOUD_POS = 	  $0602	; Cloud PMG Position
+CLOUD_REDUCER =   $0603	; Counter for Reducing Cloud Updates
 
 start
 	; Use our custom character set; which since we're using the shadow
@@ -84,29 +80,30 @@ start
 	; Install our display list
 	InstallDisplayList title_display_list
 	
-	;Initialize start colors
-
+	; Initialize start colors
 	lda	#0
 	sta 	COLOR_FLOW_LINE
 		
-	;Initialize our text scroll point
+	; Initialize our text scroll point - text scrolls from RIGHT to LEFT so
+	; we start at max HSCROL and work backwards to zero.
 	lda	#$10	
-	sta	SCR_IDX
+	sta	TEXT_SCROLL_IDX
 
-	; Initialize our cloud scroll point
+	; Initialize our cloud scroll point - clouds (etc.) scroll from LEFT to
+	; RIGHT so we start at zero and work up to max HSCROL.
 	lda	#$00
 	sta	CLOUD_SCROLL_IDX
 
-	;Setup VBI (Deferred)
+	; Setup VBI (Deferred) - Where most of our non-DLI work happens.
 	SetDeferredVBI vert_isr
 					
 	; Setup all done; now just loop forever, while incrementing the
 	; color values and registers
 lp	
-	inc     COLOR_FLOW_LINE
-	lda 	COLOR_FLOW_LINE
-	sta 	WSYNC	; Wait for horizontal retrace
-	sta 	COLPF2	; Use this directly for the playfield.	 	 
+	inc     COLOR_FLOW_LINE	; Increment to the next color for COLOR FLOW
+	lda 	COLOR_FLOW_LINE ; Get that color
+	sta 	WSYNC		; Wait for horizontal retrace
+	sta 	COLPF2		; Then set the hardware color register directly 	 
 	jmp 	lp
 
 	; Vertical Blank Interrupt Service Routine
@@ -115,8 +112,8 @@ vert_isr
 	; Setup the FIRST DLI here in the VBI so we know it will be the
 	; first DLI to be called when the frame is drawn.
 
-	lda	#$00		; First we initialize the color lookup index
-	sta	DLI_TABLE_IDX
+	lda	#$00		; First we initialize the color table lookup
+	sta	DLI_TABLE_IDX   ; index to its start.
 	SetDLI  dl_set_clouds	; Then we set the first DLI, which changes
 				; the character set to the clouds.
 	
@@ -125,20 +122,21 @@ vert_isr
 	ldx     COLOR_FLOW_TOP
 	stx	COLOR_FLOW_LINE	
 				
-	; Do Smooth Scrolling
-	lda	SCR_IDX
+	; Do Smooth Text-Scroller Scrolling
+	lda	TEXT_SCROLL_IDX
 	cmp	#$0
-	bne	cont
+	bne	cont_text_scroll
 	
 	; Update the LMS address to coarse scroll
 	adw 	scroll_lms #$02	; Two bytes per coarse scroll in Mode 7
 		
 	; Reset the smooth scroll location
 	sec
-	lda	#$10		
-cont
+	lda	#$10	
+
+cont_text_scroll
 	sbc	#$01
-	sta	SCR_IDX
+	sta	TEXT_SCROLL_IDX
 			
 	; RESET THE OVERALL SCROLLER  (Resets when scroll_lms points beyond blank_line
 	lda	scroll_lms + 1
@@ -150,11 +148,8 @@ cont
 	bcc	do_not_reset_scroller	;Bracnh of the LMS LOW pointer is lower than the last desired byte into the current page
 			
 	; RESET the scroller to the beginning of the text.
-	lda	#<scroll_line
-	sta	scroll_lms
-	lda	#>scroll_line
-	sta	scroll_lms + 1		
-
+	mwa	#scroll_line scroll_lms	; Reset the LMS address to the start of the scroller
+	
 do_not_reset_scroller		
 
 	; RESET the CLOUD Scroller?
@@ -168,16 +163,9 @@ do_not_reset_scroller
 	bcs	do_not_reset_cloud_scroller	; Don't branch if we're not at, or before, the first address (see above)
 	
 reset_cloud_scroller
-	lda	#<cloud_scroller_top_end
-	sta	cst_lms
-	lda	#>cloud_scroller_top_end
-	sta 	cst_lms + 1
-
-	lda	#<cloud_scroller_bottom_end
-	sta	csb_lms
-	lda	#>cloud_scroller_bottom_end 
-	sta 	csb_lms + 1
-
+	mwa	#cloud_scroller_top_end cst_lms
+	mwa	#cloud_scroller_bottom_end csb_lms
+	
 do_not_reset_cloud_scroller
 	
 	; Update the position of the clouds, every 8th frame
@@ -204,8 +192,8 @@ do_not_reset_cloud_scroller
 	sta	CLOUD_SCROLL_IDX	
 
 cont_clouds
-	clc
-	adc	#$01
+	clc			 ; Necessary to avoid adding #$02 when the
+	adc	#$01		 ; last load was #$FF and sets the carry bit
 	sta 	CLOUD_SCROLL_IDX
 
 skip_cloud	
@@ -221,36 +209,34 @@ exit_vb
 ; time for any one scan line or mode line.		
 
 dl_set_clouds
-	; Set the character set to the clouds
 	pha
-	SetCharacterSet cloud_chars, TRUE
-	lda 	CLOUD_SCROLL_IDX	
-	sta 	HSCROL
-	ChainDLI dl_isr, dl_set_clouds ; Next do the color-update DLI
+	SetCharacterSet cloud_chars, TRUE ; Set the character set to the clouds
+	lda 	CLOUD_SCROLL_IDX	  ; Get the smooth-scroll cloud position	
+	sta 	HSCROL			  ; Update the HSCROL register
+	ChainDLI dl_isr, dl_set_clouds 	  ; Next do the color-update DLI
 
-dl_set_chars
-	; Set the character set to the text
+dl_set_chars	
 	pha
-	SetCharacterSet charset, TRUE
-	ChainDLI dl_set_colors, dl_set_chars ; Next to the fixed colors DLI
+	SetCharacterSet charset, TRUE 	     ; Set character set to the text set
+	ChainDLI dl_set_colors, dl_set_chars ; Next do the fixed colors DLI
 
-dl_set_colors
-	; Set the colors for the remainder of the screen
+dl_set_colors	
 	pha
-	lda	#$26
+	lda	#$26	; Set the background color for remainder of screen
 	sta	COLPF0
-	lda	#$46
+	lda	#$46	; Set the text color for remainder of screen
 	sta	COLPF1
-	lda 	SCR_IDX
-	sta 	HSCROL
+	
+	lda 	TEXT_SCROLL_IDX	; Get the smooth-scroll text position ...
+	sta 	HSCROL		; ... and update the HSCROL register; scrolls
+				; in the opposite direction of clouds/scenery.
 	pla
 	rti
 
 dl_isr	
 	; Changes the background color based on a table of colors and the
 	; DLI_TABLE_IDX value.  It runs once per mode line, for 9 mode lines,
-	; then chains the next DLI, which changes the character set back to
-	; text ready for the status display.
+	; then chains the next DLI.
 
 	pha	;Store A and X
 	txa
@@ -277,27 +263,26 @@ exit_dli
 	rti
 
 END:	
-
 		run start
 				
-; Macro Built Display List
+; Macro Built Title Display List
 title_display_list
 		DL_TOP_OVERSCAN
-		DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line ; Change to Clouds Character Set
+		DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line  ; Change to Clouds Character Set
 		DL_BLANK_LINES	 1
-		DL_MODE		 [DL_TEXT_4 | DL_DLI]	; Change Background Color
+		DL_MODE		 [DL_TEXT_4 | DL_DLI]		   ; Change Background Color
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]	
 		DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-cst_lms		DL_LMS_ADDR	 cloud_scroller_top_end			; Scrolling LEFT to RIGHT, so start at END of data
+cst_lms		DL_LMS_ADDR	 cloud_scroller_top_end		   ; Scrolling LEFT to RIGHT, so start at END of data
 		DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-csb_lms		DL_LMS_ADDR	 cloud_scroller_bottom_end		; Scrolling LEFT to RIGHT, so start at END of data
+csb_lms		DL_LMS_ADDR	 cloud_scroller_bottom_end	   ; Scrolling LEFT to RIGHT, so start at END of data
 		DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], main_text
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
 		DL_MODE		 [DL_TEXT_4 | DL_DLI]
-		DL_MODE		 [DL_TEXT_4 | DL_DLI]   ; Resets Character Set
-		DL_BLANK	 DL_BLANK_1, TRUE	; Set Final Colors
+		DL_MODE		 [DL_TEXT_4 | DL_DLI]   	   ; Resets Character Set
+		DL_BLANK	 DL_BLANK_1, TRUE		   ; Set Final Colors
 		DL_MODE		 DL_TEXT_6
 		DL_MODE		 DL_TEXT_6
 		DL_MODE		 DL_TEXT_6
@@ -311,8 +296,7 @@ scroll_lms	DL_LMS_ADDR	 scroll_line
 		DL_BLANK_LINES 	 8	
 		DL_JVB		 title_display_list	
 				
-; Data for the Title Screen	
-		
+; Data for the Title Screen			
 first_line	dta	d'THE: WOEBEGONE TRAIL'*
 		dta	d'                                        '
 		dta	d'                                        '		
@@ -346,7 +330,7 @@ scroll_line	dta	d"                      WELCOME TO "
 blank_line	dta	d'                                        '
 		dta	d'                                        '
 
-		; Two lines of MODE 4 characters for the CLOUDS
+; Two blocks of MODE 4 characters for the CLOUDS
 cloud_scroller_top
 		.HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57 
 cloud_scroller_top_end
@@ -408,4 +392,3 @@ cloud_chars     ; so we're not wasting that area.
 		; Need to ensure the full PMBASE 2KB block has NO subsequent
 		; code in it, so we don't show "noise".  (e.g., putting a
 		; loop in woebegone.asm after this code shows up under the sun).
-		
