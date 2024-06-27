@@ -4,7 +4,7 @@ Various custom fonts (character sets) are used within the game; some for actual 
 ### My Fonts
 These fonts are my own creations.  I use several tools for creating them ([Pixaki](https://pixaki.com), [Photoshop](https://www.adobe.com/products/photoshop.html?promoid=RBS7NL7F&mv=other) and [GIMP](https://www.gimp.org) primarily).  In general, I will keep the original source file, a .GIF version and the final .FNT files here, so they can easily be edited and/or used:
 
-- **clouds.fnt** - A provisional font for character-graphic based clouds for ANTIC Mode 4 display.
+- **scenery.fnt** - A provisional font for character-graphic based clouds and hills/mountains for ANTIC Mode 4 display.
   
 
 #### Font Tools
