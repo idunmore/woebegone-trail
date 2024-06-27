@@ -25,7 +25,7 @@ DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
 
 CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
 HILL_SCROLL_IDX =  $0092 ; Hill Smooth-Scroll Index
-ROCKS_SCROLL_IDX = $0093 ; Rocks Smooth-Scroll Index
+ROCK_SCROLL_IDX =  $0093 ; Rocks Smooth-Scroll Index
 TEXT_SCROLL_IDX =  $0094 ; Text Smooth-Scroll Index
 
 ; Variables stuffed in Page 6 for now.
@@ -185,6 +185,22 @@ reset_hills_scroller
         mwa #[hills_scroller_bottom_end -48 ] hsb_lms    
 
 do_not_reset_hills_scroller   
+
+        ; RESET the ROCKS Scroller?
+        lda rck_lms + 1
+        cmp #>[rocks_scroller + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
+        bcc reset_rocks_scroller	; Examine how this yields <= in conjunction with next instruction
+        bne do_not_reset_rocks_scroller	; Examine how this yields <= in conjunciton with previous instruction
+
+        lda rck_lms
+        cmp #<[rocks_scroller + 1]	; Branch two bytes early, as the line is offset by HSCROL
+        bcs do_not_reset_rocks_scroller	; Don't branch if we're not at, or before, the first address (see above)
+
+reset_rocks_scroller
+        mwa #[rocks_scroller_end - 48] rck_lms
+
+do_not_reset_rocks_scroller
+        ; We've skipped resetting the rocks, so continue with the next tasks
         
         ; Update the position of the cloud, every 16th frame
         inc cloud_reducer
@@ -220,7 +236,9 @@ ck_hill cpx #$01                ; Coarse scroll the hills
         jsr coarse_scroll_hill
         bcc next
         
-ck_rock jsr coarse_scroll_rock  ; Coarse scroll the rocks
+ck_rock cpx #$02
+        bne next
+        jsr coarse_scroll_rock  ; Coarse scroll the rocks
 
 next    lda #$00                ; Reset the fraction after a coarse scroll
         sta CLOUD_SCROLL_IDX, x
@@ -256,8 +274,8 @@ coarse_scroll_rock
         ; To scroll ROCKS RIGHT, we set the LMS address to a LOWER (LEFT)
         ; position, resulting in data appearing later on the display line.
 
-        ; sbw rock_lms #$01 ; One bytes per coarse scroll in Mode 4
-        clc             ; Force branch in our caller
+        sbw rck_lms #$01 ; One bytes per coarse scroll in Mode 4
+        clc              ; Force branch in our caller
         rts
 
 ; Display List Interrupt Service Routines
@@ -332,24 +350,32 @@ dl_background_lower
         sta WSYNC	   ; wait for the next scan line
         sta COLBK	   ; to update color register               
         inc DLI_TABLE_IDX  ; Move to NEXT color in table
-        cpx #$08           ; Chain next DLI if we're 8 colors into the table
+        cpx #$06           ; Chain next DLI if we're 8 colors into the table
         bne do_not_chain   ; Exit the DLI without chaining, using an the same
                            ; routine as dl_background does (see above) 
         
          ; Done and move to the next DLI
         pla
         tax
-        ChainDLI dl_set_chars, dl_background_lower
+        ;ChainDLI dl_set_chars, dl_background_lower
+        ChainDLI dl_rock_scroll, dl_background_lower
 
-dl_nine
+dl_rock_scroll
         pha
-        lda #$F3
+        lda color_table + 7
         sta WSYNC
         sta COLBK
-        ChainDLI dl_set_chars, dl_nine
+        lda ROCK_SCROLL_IDX	; Get the smooth-scroll rock position ...
+        sta WSYNC
+        sta HSCROL		; ... and update the HSCROL register
+        ChainDLI dl_set_chars, dl_rock_scroll
 
 dl_set_chars	
-        pha
+        pha       
+        sta WSYNC                            ; Wait for scan line to finish
+                                             ; to avoid corrupting bottom line of rocks
+        lda color_table + 8                  ; Set the background color for the
+        sta COLBK                            ; last rost of the scrolling area
         SetCharacterSet charset, TRUE        ; Set character set to the text set
         ChainDLI dl_set_colors, dl_set_chars ; Next do the fixed colors DLI
 
@@ -385,11 +411,12 @@ csb_lms	DL_LMS_ADDR	 [cloud_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT
 hst_lms DL_LMS_ADDR	 [hills_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars 
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
 hsb_lms DL_LMS_ADDR	 [hills_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars  
-        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], main_text      
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]   	   ; Resets Character Set
-        DL_BLANK	 DL_BLANK_1, TRUE		   ; Set Final Colors
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], blank_text      
+        DL_MODE		 [DL_TEXT_4 | DL_DLI] 
+        DL_BLANK         DL_BLANK_1, TRUE                  ; Updates HSCROL for the ROCKS   
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL] ; Switches character set (remember it occurs AFTER the line)
+rck_lms DL_LMS_ADDR      [rocks_scroller_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars         	   
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], status_text ; Set Final Colors
         DL_MODE		 DL_TEXT_6
         DL_MODE		 DL_TEXT_6
         DL_MODE		 DL_TEXT_6
@@ -407,10 +434,10 @@ scroll_lms
 ; Data for the Title Screen			
 first_line
         dta d'THE: WOEBEGONE TRAIL'*       	
-main_text        
+blank_text       
         dta d'                                        '
         dta d'                                        '
-        dta d'                                        '
+status_text
         dta d'                                        '
         dta d'   CURRENT STATUS   '*
         dta d' EVERYONE IS:alive. '
@@ -450,6 +477,10 @@ hills_scroller_top_end
 hills_scroller_bottom     
         .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 23 25 26 03 01 02 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 02 25 26 03 11 12
 hills_scroller_bottom_end
+rocks_scroller
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
+rocks_scroller_end
+
 
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
@@ -459,7 +490,7 @@ hscrol_fractions
         .byte   $00, $00, $00
 ; How fast each band scrolls - Lower is Slower; First value is the clouds.
 hscrol_delta
-        .byte   $8, $10, $80
+        .byte   $8, $10, $40
 
 ; Character SETs ... first for the text ...	
         AlignCharacterSet
