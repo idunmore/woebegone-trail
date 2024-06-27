@@ -24,8 +24,9 @@ DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
                          ; on DLI lines without beam ovverun.
 
 CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
-HILL_SCROLL_IDX = $0092  ; Hill Smooth-Scroll Index
+HILL_SCROLL_IDX =  $0092 ; Hill Smooth-Scroll Index
 TEXT_SCROLL_IDX =  $0093 ; Text Smooth-Scroll Index
+ROCKS_SCROLL_IDX = $0094 ; Rocks Smooth-Scroll Index
 
 ; Variables stuffed in Page 6 for now.
 
@@ -155,12 +156,12 @@ do_not_reset_scroller
 
         ; RESET the CLOUD Scroller?
         lda cst_lms + 1
-        cmp #>[cloud_scroller_top + 2 ]	; Branch two bytes early, as the line is offset by HSCROL
+        cmp #>[cloud_scroller_top + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
         bcc reset_cloud_scroller	; Examine how this yields <= in conjunction with next instruction
         bne do_not_reset_cloud_scroller	; Examine how this yields <= in conjunciton with previous instruction
 
         lda cst_lms
-        cmp #<[cloud_scroller_top + 2]	; Branch two bytes early, as the line is offset by HSCROL
+        cmp #<[cloud_scroller_top + 1]	; Branch two bytes early, as the line is offset by HSCROL
         bcs do_not_reset_cloud_scroller	; Don't branch if we're not at, or before, the first address (see above)
         
 reset_cloud_scroller
@@ -171,12 +172,12 @@ do_not_reset_cloud_scroller
 
         ; RESET the HILL Scroller?
         lda hst_lms + 1
-        cmp #>[hills_scroller_top + 2 ]	; Branch two bytes early, as the line is offset by HSCROL
+        cmp #>[hills_scroller_top + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
         bcc reset_hills_scroller	; Examine how this yields <= in conjunction with next instruction
         bne do_not_reset_hills_scroller	; Examine how this yields <= in conjunciton with previous instruction
 
         lda hst_lms
-        cmp #<[hills_scroller_top + 2]	; Branch two bytes early, as the line is offset by HSCROL
+        cmp #<[hills_scroller_top + 1]	; Branch two bytes early, as the line is offset by HSCROL
         bcs do_not_reset_hills_scroller	; Don't branch if we're not at, or before, the first address (see above)
         
 reset_hills_scroller
@@ -188,7 +189,7 @@ do_not_reset_hills_scroller
         ; Update the position of the clouds, every 8th frame
         inc cloud_reducer
         lda cloud_reducer
-        cmp #$08
+        cmp #$10
         bne skip_cloud
         inc cloud_pos	; Move the PMG cloud 2 pixels to the right
         inc cloud_pos
@@ -197,15 +198,15 @@ do_not_reset_hills_scroller
         
         ; Do CLOUD scrolling
         lda CLOUD_SCROLL_IDX
-        cmp #$0F
+        cmp #$04
         bne cont_clouds
 
         ; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
-        sbw cst_lms #$04	; Four bytes per coarse scroll in Mode 4
-        sbw csb_lms #$04
+        sbw cst_lms #$01	; Four bytes per coarse scroll in Mode 4
+        sbw csb_lms #$01
 
         ; Reset the cloud scroll location
-        lda #$FF
+        lda #$00
         sta CLOUD_SCROLL_IDX       
 
 cont_clouds
@@ -215,20 +216,20 @@ cont_clouds
 
         ; Do HILL scrolling
         lda HILL_SCROLL_IDX
-        cmp #$0F
+        cmp #$04
         bne cont_hills
 
         ; FOR HILLS ONLY: Update the LMS address to coarse scroll
-        sbw hst_lms #$04	; Four bytes per coarse scroll in Mode 4
-        sbw hsb_lms #$04
+        sbw hst_lms #$01	; Four bytes per coarse scroll in Mode 4
+        sbw hsb_lms #$01
 
         ; Reset the hill scroll location
-        lda #$FF
+        lda #$00
         sta HILL_SCROLL_IDX       
 
 cont_hills
         clc		     ; Necessary to avoid adding #$02 when the
-        adc #$01	     ; last load was #$FF and sets the carry bit
+        adc #$02	     ; last load was #$FF and sets the carry bit
         sta HILL_SCROLL_IDX
 
 skip_cloud	
@@ -249,45 +250,86 @@ dl_set_clouds
         SetCharacterSet cloud_chars, TRUE ; Set the character set to the clouds
         lda CLOUD_SCROLL_IDX	          ; Get the smooth-scroll cloud position	
         sta HSCROL			  ; Update the HSCROL register
-        ChainDLI dl_set_hills, dl_set_clouds 	  ; Next do the color-update DLI
+        ChainDLI dl_background, dl_set_clouds 	  ; Next do the color-update DLI
 
-dl_set_hills
+dl_background
         pha
         txa
         pha      
 
         ldx DLI_TABLE_IDX  ;Get the NEXT color ...
-        lda color_table, X ;from the table and
+        lda color_table, x ;from the table and
         sta WSYNC	   ;wait for the next scan line
         sta COLBK	   ;to update color register	
         inc DLI_TABLE_IDX  ;Move to NEXT color in table
-               
-        ldx DLI_TABLE_IDX  
-        cpx #$04           ; Chain to the next DLI if we're 4 colors into the
-        bne skip_color     ; color table.   
-
-        ; Set the fixed colors for the hills
-        lda #$28
-        sta COLPF0
-        lda #$24
-        sta COLPF1
-
-        lda HILL_SCROLL_IDX	; Get the smooth-scroll hill position ...
-        sta WSYNC
-        sta HSCROL		; ... and update the HSCROL register
-
-        ; Done and move to the next DLI
+    
+        cpx #$02           ; Chain to the next DLI if we're 4 colors into the
+        bne do_not_chain   ; color table. 
+        
+        ; Done and move to the next DLI           
         pla
         tax
-        ChainDLI dl_isr, dl_set_hills
+        ChainDLI dl_hill_colors, dl_background
 
-skip_color
+do_not_chain
         ; We're not adjusting the color, nor chaning to the next DLI, so just
         ; restore the registers and return.
         pla
         tax
         pla
         rti
+          
+dl_hill_colors
+        pha
+        lda #$BC
+        sta WSYNC
+        sta COLBK
+        lda #$28
+        sta COLPF0
+        lda #$24
+        sta COLPF1
+        ChainDLI dl_hill_scroll, dl_hill_colors
+
+dl_hill_scroll
+        pha        
+        lda HILL_SCROLL_IDX	; Get the smooth-scroll hill position ...
+        sta WSYNC
+        sta HSCROL		; ... and update the HSCROL register
+        ChainDLI dl_background_lower, dl_hill_scroll
+
+dl_background_lower
+        pha
+        txa
+        pha      
+        inc DLI_TABLE_IDX  ;Move to NEXT color in table 
+        ldx DLI_TABLE_IDX  ;Get the NEXT color ...
+        lda color_table, x ;from the table and
+        sta WSYNC	   ;wait for the next scan line
+        sta COLBK	   ;to update color register               
+    
+        cpx #$08           ; Chain to the next DLI if we're 4 colors into the
+        bne do_not_chain   ; color table. 
+        
+         ; Done and move to the next DLI
+        pla
+        tax
+        ChainDLI dl_set_chars, dl_background_lower
+
+do_not_chain_lower
+        ; We're not adjusting the color, nor chaning to the next DLI, so just
+        ; restore the registers and return.
+        pla
+        tax
+        pla
+        rti
+
+
+dl_nine
+        pha
+        lda #$F3
+        sta WSYNC
+        sta COLBK
+        ChainDLI dl_set_chars, dl_nine
 
 dl_set_chars	
         pha
@@ -307,35 +349,6 @@ dl_set_colors
         pla
         rti
 
-dl_isr	
-        ; Changes the background color based on a table of colors and the
-        ; DLI_TABLE_IDX value.  It runs once per mode line, for 9 mode lines,
-        ; then chains the next DLI.
-
-        pha	;Store A and X
-        txa
-        pha
-                        
-        ldx DLI_TABLE_IDX  ;Get the NEXT color ...
-        lda color_table, X ;from the table and
-        sta WSYNC	   ;wait for the next scan line
-        sta COLBK	   ;to update color register	
-        inc DLI_TABLE_IDX  ;Move to NEXT color in table
-
-        lda DLI_TABLE_IDX  ;Last Index/Color?
-        cmp #$09
-        bne exit_dli	   ; If not, exit here ...
-
-        pla				
-        tax				; ... otherwise, restore X and chain to
-        ChainDLI dl_set_chars, dl_isr	; the next DLI to reset character set
-                
-exit_dli
-        pla	;Restore A and X
-        tax
-        pla
-        rti
-
 END:	
         run start
                                 
@@ -343,13 +356,14 @@ END:
 title_display_list
         DL_TOP_OVERSCAN
         DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line  ; Change to Clouds Character Set
-        DL_BLANK_LINES	 1
+        DL_BLANK_LINES	 2
         DL_MODE		 [DL_TEXT_4 | DL_DLI]		   ; Change Background Color
         DL_MODE		 [DL_TEXT_4 | DL_DLI]	
         DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
 cst_lms	DL_LMS_ADDR	 [cloud_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
         DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
 csb_lms	DL_LMS_ADDR	 [cloud_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
+        DL_BLANK         DL_BLANK_2, TRUE                  ; Updates HSCROL for the HILLS; needs 2 blank lines or ANITC gets upset.
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
 hst_lms DL_LMS_ADDR	 [hills_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars 
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
@@ -414,7 +428,7 @@ cloud_scroller_bottom
 cloud_scroller_bottom_end
 
 hills_scroller_top
-        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 hills_scroller_top_end
 hills_scroller_bottom
         .HE 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
