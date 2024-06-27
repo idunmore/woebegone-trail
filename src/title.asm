@@ -24,7 +24,8 @@ DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
                          ; on DLI lines without beam ovverun.
 
 CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
-TEXT_SCROLL_IDX =  $0092 ; Text Smooth-Scroll Index
+HILL_SCROLL_IDX = $0092  ; Hill Smooth-Scroll Index
+TEXT_SCROLL_IDX =  $0093 ; Text Smooth-Scroll Index
 
 ; Variables stuffed in Page 6 for now.
 
@@ -114,7 +115,7 @@ vert_isr
 
         lda #$00		; First we initialize the color table lookup
         sta DLI_TABLE_IDX       ; index to its start.
-        SetDLI  dl_set_clouds	; Then we set the first DLI, which changes
+        SetDLI dl_set_clouds	; Then we set the first DLI, which changes
                                 ; the character set to the clouds.
         
         ;Color Cycling Index Points for COLOR FLOW color scrolling
@@ -167,6 +168,22 @@ reset_cloud_scroller
         mwa #[cloud_scroller_bottom_end -48 ] csb_lms
         
 do_not_reset_cloud_scroller
+
+        ; RESET the HILL Scroller?
+        lda hst_lms + 1
+        cmp #>[hills_scroller_top + 2 ]	; Branch two bytes early, as the line is offset by HSCROL
+        bcc reset_hills_scroller	; Examine how this yields <= in conjunction with next instruction
+        bne do_not_reset_hills_scroller	; Examine how this yields <= in conjunciton with previous instruction
+
+        lda hst_lms
+        cmp #<[hills_scroller_top + 2]	; Branch two bytes early, as the line is offset by HSCROL
+        bcs do_not_reset_hills_scroller	; Don't branch if we're not at, or before, the first address (see above)
+        
+reset_hills_scroller
+        mwa #[hills_scroller_top_end - 48] hst_lms
+        mwa #[hills_scroller_bottom_end -48 ] hsb_lms    
+
+do_not_reset_hills_scroller   
         
         ; Update the position of the clouds, every 8th frame
         inc cloud_reducer
@@ -189,18 +206,36 @@ do_not_reset_cloud_scroller
 
         ; Reset the cloud scroll location
         lda #$FF
-        sta CLOUD_SCROLL_IDX	
+        sta CLOUD_SCROLL_IDX       
 
 cont_clouds
         clc		     ; Necessary to avoid adding #$02 when the
         adc #$01	     ; last load was #$FF and sets the carry bit
         sta CLOUD_SCROLL_IDX
 
+        ; Do HILL scrolling
+        lda HILL_SCROLL_IDX
+        cmp #$0F
+        bne cont_hills
+
+        ; FOR HILLS ONLY: Update the LMS address to coarse scroll
+        sbw hst_lms #$04	; Four bytes per coarse scroll in Mode 4
+        sbw hsb_lms #$04
+
+        ; Reset the hill scroll location
+        lda #$FF
+        sta HILL_SCROLL_IDX       
+
+cont_hills
+        clc		     ; Necessary to avoid adding #$02 when the
+        adc #$01	     ; last load was #$FF and sets the carry bit
+        sta HILL_SCROLL_IDX
+
 skip_cloud	
-        lda cloud_pos
-        sta HPOSP0	
+        lda CLOUD_POS
+        sta HPOSP0	        
                         
-exit_vb	
+exit_vb	        
         ExitDeferredVBI
 
 ; Display List Interrupt Service Routines
@@ -210,14 +245,53 @@ exit_vb
 
 dl_set_clouds
         pha
+        sta WSYNC                         ; Wait for the next scan line
         SetCharacterSet cloud_chars, TRUE ; Set the character set to the clouds
         lda CLOUD_SCROLL_IDX	          ; Get the smooth-scroll cloud position	
         sta HSCROL			  ; Update the HSCROL register
-        ChainDLI dl_isr, dl_set_clouds 	  ; Next do the color-update DLI
+        ChainDLI dl_set_hills, dl_set_clouds 	  ; Next do the color-update DLI
+
+dl_set_hills
+        pha
+        txa
+        pha      
+
+        ldx DLI_TABLE_IDX  ;Get the NEXT color ...
+        lda color_table, X ;from the table and
+        sta WSYNC	   ;wait for the next scan line
+        sta COLBK	   ;to update color register	
+        inc DLI_TABLE_IDX  ;Move to NEXT color in table
+               
+        ldx DLI_TABLE_IDX  
+        cpx #$04           ; Chain to the next DLI if we're 4 colors into the
+        bne skip_color     ; color table.   
+
+        ; Set the fixed colors for the hills
+        lda #$28
+        sta COLPF0
+        lda #$24
+        sta COLPF1
+
+        lda HILL_SCROLL_IDX	; Get the smooth-scroll hill position ...
+        sta WSYNC
+        sta HSCROL		; ... and update the HSCROL register
+
+        ; Done and move to the next DLI
+        pla
+        tax
+        ChainDLI dl_isr, dl_set_hills
+
+skip_color
+        ; We're not adjusting the color, nor chaning to the next DLI, so just
+        ; restore the registers and return.
+        pla
+        tax
+        pla
+        rti
 
 dl_set_chars	
         pha
-        SetCharacterSet charset, TRUE 	     ; Set character set to the text set
+        SetCharacterSet charset, TRUE        ; Set character set to the text set
         ChainDLI dl_set_colors, dl_set_chars ; Next do the fixed colors DLI
 
 dl_set_colors	
@@ -276,9 +350,11 @@ title_display_list
 cst_lms	DL_LMS_ADDR	 [cloud_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
         DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
 csb_lms	DL_LMS_ADDR	 [cloud_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
-        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], main_text
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
+hst_lms DL_LMS_ADDR	 [hills_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars 
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
+hsb_lms DL_LMS_ADDR	 [hills_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars  
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], main_text      
         DL_MODE		 [DL_TEXT_4 | DL_DLI]
         DL_MODE		 [DL_TEXT_4 | DL_DLI]
         DL_MODE		 [DL_TEXT_4 | DL_DLI]   	   ; Resets Character Set
@@ -299,12 +375,8 @@ scroll_lms
                                 
 ; Data for the Title Screen			
 first_line
-        dta d'THE: WOEBEGONE TRAIL'*
-        dta d'                                        '
-        dta d'                                        '		
-main_text				
-        dta d'                                        '
-        dta d'                                        '
+        dta d'THE: WOEBEGONE TRAIL'*       	
+main_text        
         dta d'                                        '
         dta d'                                        '
         dta d'                                        '
@@ -341,6 +413,13 @@ cloud_scroller_bottom
         .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
 cloud_scroller_bottom_end
 
+hills_scroller_top
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+hills_scroller_top_end
+hills_scroller_bottom
+        .HE 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+hills_scroller_bottom_end
+
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
         .byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
@@ -357,7 +436,7 @@ charset
 
 pm_graphics	; This puts a character set in the first, unused, 1KB of PMBASE 
 cloud_chars     ; so we're not wasting that area.
-        ins '../fonts/clouds.fnt'				
+        ins '../fonts/scenery.fnt'				
                 
         ; The inserted character set is 1024 bytes, so here org is at
         ; PMBASE + $400, ready for the first Player data.
@@ -370,7 +449,7 @@ cloud_chars     ; so we're not wasting that area.
         .byte %11111111
         .byte %11111110
         .byte %11111100
-        .byte %0111110
+        .byte %01111100
         .byte %11111111
         .byte %11111111
         .byte %11111110
