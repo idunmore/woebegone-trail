@@ -60,7 +60,7 @@ start
         ; Cloud
         lda #$8F
         sta PCOLOR0
-        lda #PM_SIZE_QUAD
+        lda #PM_SIZE_DOUBLE
         sta SIZEP0
         lda #$00
         sta HPOSP0
@@ -186,16 +186,18 @@ reset_hills_scroller
 
 do_not_reset_hills_scroller   
         
-        ; Update the position of the clouds, every 8th frame
+        ; Update the position of the cloud, every 16th frame
         inc cloud_reducer
         lda cloud_reducer
-        cmp #$01
+        cmp #$10
         bne skip_cloud
-        inc cloud_pos	; Move the PMG cloud 2 pixels to the right
-        inc cloud_pos
+        inc cloud_pos	; Move the PMG cloud 1 pixel to the right      
         lda #$00
         sta cloud_reducer	
-        
+
+skip_cloud	
+        lda CLOUD_POS
+        sta HPOSP0        
 
         ldx #$02                ; Last Index into hscrol_fractions + hscrol_delta
 move    lda hscrol_fractions, x ; Get the current fraction
@@ -226,34 +228,37 @@ next    lda #$00                ; Reset the fraction after a coarse scroll
 nope    dex                     ; Do the next band
         bpl move
 
-        jmp exit_vb
+        ; Done with the VBI, so exit              
+exit_vb	        
+        ExitDeferredVBI
+
+; Coarse Scrolling Routines for VBI
 
 coarse_scroll_cloud
+        ; To scroll CLOUDS RIGHT, we set the LMS address to a LOWER (LEFT)
+        ; position, resulting in data appearing later on the display line.
 
-        ; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
-        sbw cst_lms #$01	; Four bytes per coarse scroll in Mode 4
+        sbw cst_lms #$01 ; One byte per coarse scroll in Mode 4
         sbw csb_lms #$01
-        clc
+        clc              ; Force branch in our caller
         rts
 
 coarse_scroll_hill
-
-        ; FOR HILLS ONLY: Update the LMS address to coarse scroll
-        sbw hst_lms #$01	; Four bytes per coarse scroll in Mode 4
+        ; To scroll HILLS RIGHT, we set the LMS address to a LOWER (LEFT)
+        ; position, resulting in data appearing later on the display line.
+       
+        sbw hst_lms #$01 ; One bytes per coarse scroll in Mode 4
         sbw hsb_lms #$01
-        clc
+        clc              ; Force branch in our caller
         rts
 
 coarse_scroll_rock
-        clc
-        rts
+        ; To scroll ROCKS RIGHT, we set the LMS address to a LOWER (LEFT)
+        ; position, resulting in data appearing later on the display line.
 
-skip_cloud	
-        lda CLOUD_POS
-        sta HPOSP0	        
-                        
-exit_vb	        
-        ExitDeferredVBI
+        ; sbw rock_lms #$01 ; One bytes per coarse scroll in Mode 4
+        clc             ; Force branch in our caller
+        rts
 
 ; Display List Interrupt Service Routines
 ;
@@ -279,8 +284,8 @@ dl_background
         sta COLBK	   ; to update color register	
         inc DLI_TABLE_IDX  ; Move to NEXT color in table
     
-        cpx #$02           ; Chain to the next DLI if we're 4 colors into the
-        bne do_not_chain   ; color table. 
+        cpx #$02           ; Chain next DLI if we're 2 colors into the table
+        bne do_not_chain 
         
         ; Done and move to the next DLI 
         inc DLI_TABLE_IDX  ; Move to the next color in the table, so the next
@@ -290,6 +295,8 @@ dl_background
         ChainDLI dl_hill_colors, dl_background
 
 do_not_chain
+        ; Used in several places to exit the DLI
+        
         ; We're not adjusting the color, nor chaning to the next DLI, so just
         ; restore the registers and return.
         pla
@@ -325,22 +332,14 @@ dl_background_lower
         sta WSYNC	   ; wait for the next scan line
         sta COLBK	   ; to update color register               
         inc DLI_TABLE_IDX  ; Move to NEXT color in table
-        cpx #$08           ; Chain to the next DLI if we're 4 colors into the
-        bne do_not_chain   ; color table. 
+        cpx #$08           ; Chain next DLI if we're 8 colors into the table
+        bne do_not_chain   ; Exit the DLI without chaining, using an the same
+                           ; routine as dl_background does (see above) 
         
          ; Done and move to the next DLI
         pla
         tax
         ChainDLI dl_set_chars, dl_background_lower
-
-do_not_chain_lower
-        ; We're not adjusting the color, nor chaning to the next DLI, so just
-        ; restore the registers and return.
-        pla
-        tax
-        pla
-        rti
-
 
 dl_nine
         pha
@@ -445,11 +444,11 @@ cloud_scroller_bottom
         .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
 cloud_scroller_bottom_end
 
-hills_scroller_top
-        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+hills_scroller_top        
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
 hills_scroller_top_end
-hills_scroller_bottom
-        .HE 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 21 22 23 24 25 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+hills_scroller_bottom     
+        .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 23 25 26 03 01 02 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 02 25 26 03 11 12
 hills_scroller_bottom_end
 
 ; Colors for the BACKGROUND in main cloud/scenery area		
@@ -460,7 +459,7 @@ hscrol_fractions
         .byte   $00, $00, $00
 ; How fast each band scrolls - Lower is Slower; First value is the clouds.
 hscrol_delta
-        .byte   $8, $20, $80
+        .byte   $8, $10, $80
 
 ; Character SETs ... first for the text ...	
         AlignCharacterSet
@@ -484,13 +483,13 @@ cloud_chars     ; so we're not wasting that area.
         .byte %00100000
         .byte %01101010
         .byte %11111111
-        .byte %11111111
-        .byte %11111110
+        .byte %11011111
+        .byte %11100110
         .byte %11111100
         .byte %01111100
-        .byte %11111111
-        .byte %11111111
-        .byte %11111110
+        .byte %11011111
+        .byte %11011111
+        .byte %11111010
         .byte %11001100
         
         ; "Sun"	
