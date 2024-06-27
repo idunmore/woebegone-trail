@@ -23,6 +23,11 @@ TODOs:
     This is currently very quick/dirty - just testing and proving techniques
     and working through various timing and sequencing issues.
 
+    !!! Update HILL/MOUNTAIN scrolling, and other VBI/DLIs, to allow each
+        region to scroll at different speeds.  Will likely need new DLIs on a
+        per "block" basis, directly handling color (vs. a table-driven
+        approach), and HSCROL.
+
       * Will require a series of slowly-incrementing counters, with resets
         PMG and HSCROLL positioning, at 1, 2, 4, 8 and 16 frames per increment.
 
