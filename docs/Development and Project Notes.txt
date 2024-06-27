@@ -23,20 +23,10 @@ TODOs:
     This is currently very quick/dirty - just testing and proving techniques
     and working through various timing and sequencing issues.
 
-    !!! Currently scrolling occurs every 8th frame, with each band moving a
-        different number of color clocks every time.  A better approach is to
-        only move each band ONE color clock at a time, but to vary how many
-        frames between each band's update.
+      * Add data to show hills/mountains for full display.
 
-      * Will require a series of slowly-incrementing counters, with resets
-        PMG and HSCROLL positioning, at 1, 2, 4, 8 and 16 frames per increment.
-
-        These will drive the clouds and other "parallax" elements of the
-        scrolling display.
-
-      * Lots of tidy-up with scrollers and resetting LMS values when scroll
-        limits are reached.
-
+      * Add foreground/rock scrolling.
+      
       * Refactor/rename all labels for conditional operation.
 
       * Properly comment DLIs and DLIST mode line behavior.

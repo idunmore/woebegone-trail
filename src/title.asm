@@ -25,8 +25,8 @@ DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
 
 CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
 HILL_SCROLL_IDX =  $0092 ; Hill Smooth-Scroll Index
-TEXT_SCROLL_IDX =  $0093 ; Text Smooth-Scroll Index
-ROCKS_SCROLL_IDX = $0094 ; Rocks Smooth-Scroll Index
+ROCKS_SCROLL_IDX = $0093 ; Rocks Smooth-Scroll Index
+TEXT_SCROLL_IDX =  $0094 ; Text Smooth-Scroll Index
 
 ; Variables stuffed in Page 6 for now.
 
@@ -189,48 +189,64 @@ do_not_reset_hills_scroller
         ; Update the position of the clouds, every 8th frame
         inc cloud_reducer
         lda cloud_reducer
-        cmp #$10
+        cmp #$01
         bne skip_cloud
         inc cloud_pos	; Move the PMG cloud 2 pixels to the right
         inc cloud_pos
         lda #$00
         sta cloud_reducer	
         
-        ; Do CLOUD scrolling
-        lda CLOUD_SCROLL_IDX
-        cmp #$04
-        bne cont_clouds
+
+        ldx #$02                ; Last Index into hscrol_fractions + hscrol_delta
+move    lda hscrol_fractions, x ; Get the current fraction
+        clc
+        adc hscrol_delta, x     ; Add the delta
+        sta hscrol_fractions, x ; Store the new fraction
+        lda CLOUD_SCROLL_IDX, x ; Get the current HSCROL position
+        adc #$00                ; Add the overflow value from the fraction (fraction rolled over)
+        sta CLOUD_SCROLL_IDX, x ; Store the new HSCROL position
+        cmp #$04                ; We're in Mode 4, so 4 color-clocks (scroll values)
+        bcc nope                ; Done with this band
+
+        cpx #$00                ; Coarse scroll the clouds
+        bne ck_hill
+        jsr coarse_scroll_cloud
+        bcc next
+
+ck_hill cpx #$01                ; Coarse scroll the hills
+        bne ck_rock
+        jsr coarse_scroll_hill
+        bcc next
+        
+ck_rock jsr coarse_scroll_rock  ; Coarse scroll the rocks
+
+next    lda #$00                ; Reset the fraction after a coarse scroll
+        sta CLOUD_SCROLL_IDX, x
+
+nope    dex                     ; Do the next band
+        bpl move
+
+        jmp exit_vb
+
+coarse_scroll_cloud
 
         ; FOR CLOUDS ONLY: Update the LMS address to coarse scroll
         sbw cst_lms #$01	; Four bytes per coarse scroll in Mode 4
         sbw csb_lms #$01
+        clc
+        rts
 
-        ; Reset the cloud scroll location
-        lda #$00
-        sta CLOUD_SCROLL_IDX       
-
-cont_clouds
-        clc		     ; Necessary to avoid adding #$02 when the
-        adc #$01	     ; last load was #$FF and sets the carry bit
-        sta CLOUD_SCROLL_IDX
-
-        ; Do HILL scrolling
-        lda HILL_SCROLL_IDX
-        cmp #$04
-        bne cont_hills
+coarse_scroll_hill
 
         ; FOR HILLS ONLY: Update the LMS address to coarse scroll
         sbw hst_lms #$01	; Four bytes per coarse scroll in Mode 4
         sbw hsb_lms #$01
+        clc
+        rts
 
-        ; Reset the hill scroll location
-        lda #$00
-        sta HILL_SCROLL_IDX       
-
-cont_hills
-        clc		     ; Necessary to avoid adding #$02 when the
-        adc #$02	     ; last load was #$FF and sets the carry bit
-        sta HILL_SCROLL_IDX
+coarse_scroll_rock
+        clc
+        rts
 
 skip_cloud	
         lda CLOUD_POS
@@ -257,16 +273,18 @@ dl_background
         txa
         pha      
 
-        ldx DLI_TABLE_IDX  ;Get the NEXT color ...
-        lda color_table, x ;from the table and
-        sta WSYNC	   ;wait for the next scan line
-        sta COLBK	   ;to update color register	
-        inc DLI_TABLE_IDX  ;Move to NEXT color in table
+        ldx DLI_TABLE_IDX  ; Get the NEXT color ...
+        lda color_table, x ; from the table and
+        sta WSYNC	   ; wait for the next scan line
+        sta COLBK	   ; to update color register	
+        inc DLI_TABLE_IDX  ; Move to NEXT color in table
     
         cpx #$02           ; Chain to the next DLI if we're 4 colors into the
         bne do_not_chain   ; color table. 
         
-        ; Done and move to the next DLI           
+        ; Done and move to the next DLI 
+        inc DLI_TABLE_IDX  ; Move to the next color in the table, so the next
+                           ; table read is correct for the next DLI        
         pla
         tax
         ChainDLI dl_hill_colors, dl_background
@@ -301,12 +319,12 @@ dl_background_lower
         pha
         txa
         pha      
-        inc DLI_TABLE_IDX  ;Move to NEXT color in table 
-        ldx DLI_TABLE_IDX  ;Get the NEXT color ...
-        lda color_table, x ;from the table and
-        sta WSYNC	   ;wait for the next scan line
-        sta COLBK	   ;to update color register               
-    
+        
+        ldx DLI_TABLE_IDX  ; Get the NEXT color ...
+        lda color_table, x ; from the table and
+        sta WSYNC	   ; wait for the next scan line
+        sta COLBK	   ; to update color register               
+        inc DLI_TABLE_IDX  ; Move to NEXT color in table
         cpx #$08           ; Chain to the next DLI if we're 4 colors into the
         bne do_not_chain   ; color table. 
         
@@ -437,6 +455,12 @@ hills_scroller_bottom_end
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
         .byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
+
+hscrol_fractions        
+        .byte   $00, $00, $00
+; How fast each band scrolls - Lower is Slower; First value is the clouds.
+hscrol_delta
+        .byte   $8, $20, $80
 
 ; Character SETs ... first for the text ...	
         AlignCharacterSet
