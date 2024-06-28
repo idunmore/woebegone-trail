@@ -362,6 +362,10 @@ dl_background_lower
 
 dl_rock_scroll
         pha
+        lda #$B4                ; Set colors for the rocks
+        sta COLPF0
+        lda #$C6
+        sta COLPF1
         lda color_table + 7
         sta WSYNC
         sta COLBK
@@ -429,9 +433,13 @@ scroll_lms
         DL_LMS_ADDR	 scroll_line
         DL_BLANK_LINES	 8
         DL_BLANK_LINES 	 8	
-        DL_JVB		 title_display_list	
-                                
-; Data for the Title Screen			
+        DL_JVB		 title_display_list
+
+; Data for the Title Screen
+
+        .align BOUNDARY_1K ; Align to a 1KB boundary, so we don't cross a 4K
+                           ; boundary and get ANTIC all upset.
+
 first_line
         dta d'THE: WOEBEGONE TRAIL'*       	
 blank_text       
@@ -441,21 +449,27 @@ status_text
         dta d'                                        '
         dta d'   CURRENT STATUS   '*
         dta d' EVERYONE IS:alive. '
-        dta d'MORALE IS:faltering.'
+        dta d'MORALE IS:improving.'
         dta d'location'*
         dta d':'
         dta d'SNAKE RIVER'*
         dta d'   Press [START] to Die of Dysentery.   '*
 scroll_line
-        dta d"                      WELCOME TO "
+        dta d'                      WELCOME TO '
         dta d'THE WOEBEGONE TRAIL'*
-        dta d" ... A MODERN HOMAGE TO "
+        dta d' ... A MODERN HOMAGE TO '
         dta d'THE OREGON TRAIL'*
         dta d' FOR '
         dta d'ATARI 8-BIT'*
-        dta d' COMPUTERS'
-        dta d' ... '
-        dta d' FONT (provisional) BY "damieng" (damieng.com/typography) '
+        dta d' COMPUTERS ... BUILT WITH'
+        dta d' MADS'*
+        dta d' - THE mad assembler ...'
+        dta d' equates/includes & macros inspired by (and some code from)'
+        dta d" KEN JENNINGS"*
+        dta d' (github.com/kenjennings/atari-mads-includes) ...'
+        dta d' font BY "'        
+        dta d'DAMIENG'*
+        dta d'" (damieng.com/typography)'
         dta d' .......... press ['
         dta d'START'*
         dta d'] to die of dysentery.'	
@@ -471,16 +485,18 @@ cloud_scroller_bottom
         .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
 cloud_scroller_bottom_end
 
+; Two blocks of MODE 4 characters for the HILLS
 hills_scroller_top        
         .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
 hills_scroller_top_end
 hills_scroller_bottom     
         .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 23 25 26 03 01 02 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 02 25 26 03 11 12
 hills_scroller_bottom_end
-rocks_scroller
-        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
-rocks_scroller_end
 
+; One block of MODE 4 characters for the ROCKS
+rocks_scroller       
+        .HE 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64
+rocks_scroller_end
 
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
@@ -490,7 +506,7 @@ hscrol_fractions
         .byte   $00, $00, $00
 ; How fast each band scrolls - Lower is Slower; First value is the clouds.
 hscrol_delta
-        .byte   $8, $10, $40
+        .byte   $4, $10, $40
 
 ; Character SETs ... first for the text ...	
         AlignCharacterSet
