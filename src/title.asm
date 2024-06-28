@@ -11,6 +11,7 @@
         icl '../include/ANTIC.asm'
         icl '../include/GTIA.asm'
         icl '../include/character_set.asm'
+        icl '../include/colors.asm'
         icl '../include/display_list.asm'	
         icl '../include/vertical_blank.asm'
 
@@ -44,13 +45,13 @@ start
         SetCharacterSet charset
         
         ; Set Background Color		
-        lda #$75
+        lda #COLOR_ULTRAMARINE_BLUE | $04 ; Luma = 4
         sta COLOR4
                 
         ; Set Playfield Colors
-        lda #$0C
+        lda #COLOR_GREY | $0C ; Almost white       
         sta COLOR0
-        lda #$0F
+        lda #COLOR_WHITE      ; Bright white
         sta COLOR1
                 
         ; Display Initial Player Missiles
@@ -58,7 +59,7 @@ start
         sta PMBASE
         
         ; Cloud
-        lda #$8F
+        lda #COLOR_MEDIUM_BLUE | $0F ; Lightest medium blue
         sta PCOLOR0
         lda #PM_SIZE_DOUBLE
         sta SIZEP0
@@ -66,7 +67,7 @@ start
         sta HPOSP0
         
         ; Sun
-        lda #$EF
+        lda #COLOR_ORANGE_GREEN | $0F ; Lightest orange green - YELLOW
         sta PCOLOR1
         lda #PM_SIZE_NORMAL
         sta SIZEP1
@@ -84,7 +85,7 @@ start
         
         ; Initialize start colors
         lda #0
-        sta  COLOR_FLOW_LINE
+        sta COLOR_FLOW_LINE
                 
         ; Initialize our text scroll point - text scrolls from RIGHT to LEFT so
         ; we start at max HSCROL and work backwards to zero.
@@ -265,7 +266,7 @@ coarse_scroll_hill
         ; To scroll HILLS RIGHT, we set the LMS address to a LOWER (LEFT)
         ; position, resulting in data appearing later on the display line.
        
-        sbw hst_lms #$01 ; One bytes per coarse scroll in Mode 4
+        sbw hst_lms #$01 ; One byte per coarse scroll in Mode 4
         sbw hsb_lms #$01
         clc              ; Force branch in our caller
         rts
@@ -274,7 +275,7 @@ coarse_scroll_rock
         ; To scroll ROCKS RIGHT, we set the LMS address to a LOWER (LEFT)
         ; position, resulting in data appearing later on the display line.
 
-        sbw rck_lms #$01 ; One bytes per coarse scroll in Mode 4
+        sbw rck_lms #$01 ; One byte per coarse scroll in Mode 4
         clc              ; Force branch in our caller
         rts
 
@@ -313,7 +314,7 @@ dl_background
         ChainDLI dl_hill_colors, dl_background
 
 do_not_chain
-        ; Used in several places to exit the DLI
+        ; Called from several places to exit the DLI
         
         ; We're not adjusting the color, nor chaning to the next DLI, so just
         ; restore the registers and return.
@@ -324,20 +325,20 @@ do_not_chain
           
 dl_hill_colors
         pha
-        lda #$BC
+        lda #COLOR_OLIVE_GREEN | $0C ; Very light olive green
         sta WSYNC
         sta COLBK
-        lda #$28
+        lda #COLOR_RED_ORANGE | $08  ; Medimum red orange
         sta COLPF0
-        lda #$24
+        lda #COLOR_RED_ORANGE | $04  ; Dark red orange
         sta COLPF1
         ChainDLI dl_hill_scroll, dl_hill_colors
 
 dl_hill_scroll
         pha        
-        lda HILL_SCROLL_IDX	; Get the smooth-scroll hill position ...
+        lda HILL_SCROLL_IDX ; Get the smooth-scroll hill position ...
         sta WSYNC
-        sta HSCROL		; ... and update the HSCROL register
+        sta HSCROL	    ; ... and update the HSCROL register
         ChainDLI dl_background_lower, dl_hill_scroll
 
 dl_background_lower
@@ -362,22 +363,22 @@ dl_background_lower
 
 dl_rock_scroll
         pha
-        lda #$B4                ; Set colors for the rocks
+        lda #COLOR_OLIVE_GREEN | $04  ; Dark olive green - brown
         sta COLPF0
-        lda #$C6
+        lda #COLOR_MEDIUM_GREEN | $06 ; Medium green - brown
         sta COLPF1
         lda color_table + 7
         sta WSYNC
         sta COLBK
-        lda ROCK_SCROLL_IDX	; Get the smooth-scroll rock position ...
+        lda ROCK_SCROLL_IDX	      ; Get the smooth-scroll rock position ...
         sta WSYNC
-        sta HSCROL		; ... and update the HSCROL register
+        sta HSCROL	              ; ... and update the HSCROL register
         ChainDLI dl_set_chars, dl_rock_scroll
 
 dl_set_chars	
         pha       
-        sta WSYNC                            ; Wait for scan line to finish
-                                             ; to avoid corrupting bottom line of rocks
+        sta WSYNC                            ; Wait for scan line to finish to
+                                             ; avoid corrupting rocks display
         lda color_table + 8                  ; Set the background color for the
         sta COLBK                            ; last rost of the scrolling area
         SetCharacterSet charset, TRUE        ; Set character set to the text set
@@ -385,10 +386,10 @@ dl_set_chars
 
 dl_set_colors	
         pha
-        lda #$26	; Set the background color for remainder of screen
-        sta COLPF0
-        lda #$46	; Set the text color for remainder of screen
-        sta COLPF1
+        lda #COLOR_RED_ORANGE | $06 ; Medium red orange	
+        sta COLPF0                  ; Set background color remainder of screen
+        lda #COLOR_RED | $06        ; Medium red
+        sta COLPF1                  ; Set  text color for remainder of screen
         
         lda  TEXT_SCROLL_IDX	; Get the smooth-scroll text position ...
         sta  HSCROL		; ... and update the HSCROL register; scrolls
@@ -417,7 +418,8 @@ hst_lms DL_LMS_ADDR	 [hills_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT,
 hsb_lms DL_LMS_ADDR	 [hills_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars  
         DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], blank_text      
         DL_MODE		 [DL_TEXT_4 | DL_DLI] 
-        DL_BLANK         DL_BLANK_1, TRUE                  ; Updates HSCROL for the ROCKS   
+        DL_BLANK         DL_BLANK_1, TRUE                  ; Updates HSCROL for the ROCKS
+        DL_BLANK	 DL_BLANK_2                        ; Needed for Atari800 emulator to stop HSCROL glitching
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL] ; Switches character set (remember it occurs AFTER the line)
 rck_lms DL_LMS_ADDR      [rocks_scroller_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars         	   
         DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], status_text ; Set Final Colors
@@ -437,7 +439,7 @@ scroll_lms
 
 ; Data for the Title Screen
 
-        .align BOUNDARY_1K ; Align to a 1KB boundary, so we don't cross a 4K
+        .align BOUNDARY_4K ; Align to a 1KB boundary, so we don't cross a 4K
                            ; boundary and get ANTIC all upset.
 
 first_line
