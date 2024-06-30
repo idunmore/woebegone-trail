@@ -15,50 +15,66 @@
         icl '../include/display_list.asm'	
         icl '../include/vertical_blank.asm'
 
-; TODO: Quick/dirty title screen.  Moves title screen "technique tests" to real
-;       woebegone project. Uses MADS macros and thoses from the "include" folder
-;       (instead of explicit, long-hand, 6502 code).
+; Local Constants and Equates
 
-; Time-Critical PAGE ZERO variables
+MAX_HSCROL_MODE7 = $10 ; Maximum HSCROL value for Mode 7 (16 color clocks)
+MAX_HSCROL_MODE4 = $04 ; Maximum HSCROL value for Mode 4 (4 color clocks)
 
-DLI_TABLE_IDX =    $0090 ; Put this in page zero to save enough time for HSCROL
-                         ; on DLI lines without beam ovverun.
+MODE4_HSCROL_LINE_LENGTH = $30 ; Bytes per normal-playfield width HSCROL line in Mode 4
 
-CLOUD_SCROLL_IDX = $0091 ; Cloud Smooth-Scroll Index
-HILL_SCROLL_IDX =  $0092 ; Hill Smooth-Scroll Index
-ROCK_SCROLL_IDX =  $0093 ; Rocks Smooth-Scroll Index
-TEXT_SCROLL_IDX =  $0094 ; Text Smooth-Scroll Index
+; Variables and Values we want to have in specific memory locations.
 
-; Variables stuffed in Page 6 for now.
+; Use Page 0 for Time-Critical Variables
+;
+; These are faster to access and use shorter instructions (quicker to decode)
+; which is important for highly time-sensitive code, like DLIs.
 
-; COLOR FLOW variables
-COLOR_FLOW_LINE = $0600	; Current color for the COLOR FLOW scan line
-COLOR_FLOW_TOP =  $0601 ; First color (top scan line) for COLOR FLOW
+colorTableIdx = $0080 ; Index into color lookup table for color-change DLIs
 
-; Cloud PMG Position and cycle counter
-CLOUD_POS = 	  $0602	; Cloud PMG Position
-CLOUD_REDUCER =   $0603	; Counter for Reducing Cloud Updates
+sceneryBands =  $0081 ; Used to index below HSCROL Pos values as a TABLE (,x)
+cloudBandPos =  $0081 ; Cloud (top) band HSCROL smooth-scroll position
+hillBandPos =   $0082 ; Hills (middle) band HSCROL smooth-scroll position
+shrubBandPos =  $0083 ; Shrubs (bottom) band HSCROL smooth-scroll position
+cloudPos =      $0084 ; Cloud PMG horizontal position 
+
+textHSCROLPos = $0085 ; Text scroller HSCROL smooth-scroll position
+
+; Non-Time Critical Variables
+
+; Using Page 6 for now, but these don't necessarily need to be in a specific
+; location; they could just be .DEFined and the assembler allowed to place them
+
+; "Color Flow" Variables - "Color Flow" is the scrolling bands of color
+;                          (sometimes called the "venetian blind effect),
+;                          moving up/down the screen, and in text etc.
+
+colorFlowFirstLine =   $0600 ; Color for the first scan line of the Color Flow
+colorFlowCurrentLine = $0601 ; Color fot the current Color Flow scan line
+
+; Title Screen Entry Point
 
 start
-        ; Use our custom character set; which since we're using the shadow
-        ; register to do it, will be reset automatically in the VBI
-        SetCharacterSet charset
+        ; Initial Setup
+
+        ; The main character set, and initial playfield and background colors
+        ; are set using their shadow registers, so they will be automatically
+        ; refreshed at the end of the VBI (*we* don't have to keep doing it).
+
+        SetCharacterSet fntText ; Main text font
         
-        ; Set Background Color		
-        lda #COLOR_ULTRAMARINE_BLUE | $04 ; Luma = 4
-        sta COLOR4
-                
-        ; Set Playfield Colors
-        lda #COLOR_GREY | $0C ; Almost white       
+        lda #COLOR_ULTRAMARINE_BLUE | $04 ; Dark blue background (upper sky)
+        sta COLBAK      
+        lda #COLOR_GREY | $0C ; Almost white (clouds)     
         sta COLOR0
-        lda #COLOR_WHITE      ; Bright white
+        lda #COLOR_WHITE      ; Bright white (clouds)
         sta COLOR1
-                
-        ; Display Initial Player Missiles
-        lda #>pm_graphics
+        
+        ; Setup PMG (Player Missile Graphics)
+        
+        lda #>pm_graphics ; Page # (high-byte) of 2K aligned PMG bitmap data
         sta PMBASE
         
-        ; Cloud
+        ; Cloud - Player 0
         lda #COLOR_MEDIUM_BLUE | $0F ; Lightest medium blue
         sta PCOLOR0
         lda #PM_SIZE_DOUBLE
@@ -66,7 +82,7 @@ start
         lda #$00
         sta HPOSP0
         
-        ; Sun
+        ; Sun - Player 1
         lda #COLOR_ORANGE_GREEN | $0F ; Lightest orange green - YELLOW
         sta PCOLOR1
         lda #PM_SIZE_NORMAL
@@ -74,178 +90,200 @@ start
         lda #$B0
         sta HPOSP1
 
-        ; Enable and Display!
+        ; Enable and Display PMGs - Maintaining necessary settings for SDMCTL
         lda #ENABLE_PLAYERS
         sta GRACTL
-        lda #62
+        lda #ENABLE_DL_DMA | PM_1LINE_RESOLUTION | ENABLE_PM_DMA | PLAYFIELD_WIDTH_NORMAL        
         sta SDMCTL
-                                        
-        ; Install our display list
-        InstallDisplayList title_display_list
+
+        ; Main Screen Setup
+
+        InstallDisplayList dlTitle ; Install our custom display list
         
-        ; Initialize start colors
-        lda #0
-        sta COLOR_FLOW_LINE
-                
-        ; Initialize our text scroll point - text scrolls from RIGHT to LEFT so
-        ; we start at max HSCROL and work backwards to zero.
-        lda #$10	
-        sta TEXT_SCROLL_IDX
+        lda #MAX_HSCROL_MODE7 ; Text scroller runs right to left, so start at
+        sta textHSCROLPos     ; right-most HSCROL position and work back to zero
+        
+        lda #$00           ; Parallax scrolling bands move from left to right, 
+        sta cloudBandPos   ; so start them at the left-most HSCROL position,
+        sta hillBandPos    ; and then increment to scroll right.
+        sta shrubBandPos
 
-        ; Initialize our cloud scroll point - clouds (etc.) scroll from LEFT to
-        ; RIGHT so we start at zero and work up to max HSCROL.
-        lda #$00
-        sta CLOUD_SCROLL_IDX
-
-        ; Setup VBI (Deferred) - Where most of our non-DLI work happens.
-        SetDeferredVBI vert_isr
+        ; Most of our work occurs in a deferred mode VBI ...
+        SetDeferredVBI vbiMain
                                         
-        ; Setup all done; now just loop forever, while incrementing the
-        ; color values and registers
-lp	
-        inc COLOR_FLOW_LINE ; Increment to the next color for COLOR FLOW
-        lda COLOR_FLOW_LINE ; Get that color
-        sta WSYNC	    ; Wait for horizontal retrace
-        sta COLPF2	    ; Then set the hardware color register directly 	 
-        jmp lp
+        ; Setup is all done; now just loop forever doing "Color Flow":
+
+loopForever	
+        inc colorFlowCurrentLine ; Increment color for Color Flow
+        lda colorFlowCurrentLine ; Get that color
+        sta WSYNC	         ; Wait for horizontal retrace
+        sta COLPF2	         ; Set the hardware color register directly 	 
+        jmp loopForever
 
         ; Vertical Blank Interrupt Service Routine
 
-vert_isr
-        ; Setup the FIRST DLI here in the VBI so we know it will be the
-        ; first DLI to be called when the frame is drawn.
+        ; Most of the actual work for the title screen occurs during this VBI,
+        ; including text and parallax scrolling.
 
-        lda #$00		; First we initialize the color table lookup
-        sta DLI_TABLE_IDX       ; index to its start.
-        SetDLI dl_set_clouds	; Then we set the first DLI, which changes
-                                ; the character set to the clouds.
+vbiMain
         
-        ;Color Cycling Index Points for COLOR FLOW color scrolling
-        inc COLOR_FLOW_TOP
-        ldx COLOR_FLOW_TOP
-        stx COLOR_FLOW_LINE	
+        lda #$00	  ; Reset the DLI color table pointer to its start, 
+        sta colorTableIdx ; before we setup the actual DLIs
+
+        ; We are using multiple, chained, DLIs, so we use the VBI to set, and
+        ; reset, the correct FIRST DLIs, so they always run in order.
+
+        SetDLI dliSetClouds ; First DLI sets up the cloud band scroll and colors
+        
+        ; "Color Flow" Update
+
+        inc colorFlowFirstLine   ; Next color for first line, which makes the
+        ldx colorFlowFirstLine   ; colors "flow" up the screen
+        stx colorFlowCurrentLine ; Current line is also the first line after VBI
                                 
-        ; Do Smooth Text-Scroller Scrolling
-        lda TEXT_SCROLL_IDX
-        cmp #$0
-        bne cont_text_scroll
-        
-        ; Update the LMS address to coarse scroll
-        adw scroll_lms #$02	; Two bytes per coarse scroll in Mode 7
-                
-        ; Reset the smooth scroll location
-        sec
-        lda #$10	
+        ; Main Text Scroller
 
-cont_text_scroll
-        sbc #$01
-        sta TEXT_SCROLL_IDX
+        lda textHSCROLPos         ; Get the current text smooth scroll position
+        cmp #$0                   ; and see if we need to do a coarse scroll
+        bne doNotCoarseScrollText
+        
+        adw scroll_lms #$02       ; Yes; so coarse scroll (2 bytes for mode 7)                
+        sec                       ; Then reset the smooth scroll position
+        lda #MAX_HSCROL_MODE7	  ; to it's right-most position.
+
+doNotCoarseScrollText
+        sbc #$01                  ; Decrement the smooth scroll location
+        sta textHSCROLPos         ; which scrolls to the left
                         
-        ; RESET THE OVERALL SCROLLER  (Resets when scroll_lms points beyond blank_line
-        lda scroll_lms + 1
-        cmp #>blank_line
-        bcc do_not_reset_scroller ;Branch if the LMS HIGH pointer is lower than the last page of scroller data.
-        
-        lda scroll_lms
-        cmp #<blank_line
-        bcc do_not_reset_scroller ;Branch if the LMS LOW pointer is lower than the last desired byte into the current page
-                        
-        ; RESET the scroller to the beginning of the text.
-        mwa #scroll_line scroll_lms ; Reset the LMS address to the start of the scroller
-        
-do_not_reset_scroller		
+        lda scroll_lms + 1        ; Reached end of text scroller? Reset?
+        cmp #>scroll_text_end     ; Check high-byte of LMS address first ...
+        bcc doNotResetTextScroll  ; No, don't reset the text scroller yet
 
-        ; RESET the CLOUD Scroller?
-        lda cst_lms + 1
-        cmp #>[cloud_scroller_top + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
-        bcc reset_cloud_scroller	; Examine how this yields <= in conjunction with next instruction
-        bne do_not_reset_cloud_scroller	; Examine how this yields <= in conjunciton with previous instruction
+        lda scroll_lms            ; High-byte of LMS address is the same, so
+        cmp #<scroll_text_end     ; check the low-byte of the LMS address
+        bcc doNotResetTextScroll  ; No, don't reset the text scroller yet
+                                
+        mwa #scroll_text scroll_lms ; Reset the text scroller by pointing its
+                                    ; LMS address to start of scroll text
 
-        lda cst_lms
-        cmp #<[cloud_scroller_top + 1]	; Branch two bytes early, as the line is offset by HSCROL
-        bcs do_not_reset_cloud_scroller	; Don't branch if we're not at, or before, the first address (see above)
-        
-reset_cloud_scroller
-        mwa #[cloud_scroller_top_end - 48] cst_lms
-        mwa #[cloud_scroller_bottom_end -48 ] csb_lms
-        
-do_not_reset_cloud_scroller
+doNotResetTextScroll	
 
-        ; RESET the HILL Scroller?
-        lda hst_lms + 1
-        cmp #>[hills_scroller_top + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
-        bcc reset_hills_scroller	; Examine how this yields <= in conjunction with next instruction
-        bne do_not_reset_hills_scroller	; Examine how this yields <= in conjunciton with previous instruction
+        ; Parallax Scrolling
 
-        lda hst_lms
-        cmp #<[hills_scroller_top + 1]	; Branch two bytes early, as the line is offset by HSCROL
-        bcs do_not_reset_hills_scroller	; Don't branch if we're not at, or before, the first address (see above)
-        
-reset_hills_scroller
-        mwa #[hills_scroller_top_end - 48] hst_lms
-        mwa #[hills_scroller_bottom_end -48 ] hsb_lms    
+        ; Each band (see sceneryBands) is scrolled by a single color-clock/pixel
+        ; but how often that happens is determined by the delta value in the
+        ; hscrol_delta table.  The fraction value in hscrol_fractions is used
+        ; to accumulate the fractional part of the scroll, and when it reaches
+        ; 256, the CARRY FLAG is set, and the overflow is used to increment
+        ; the actual sceneryBand HSCROL position.
+        ;
+        ; Effectively this is a two-byte fixed-point number, with the high-byte
+        ; being the HSCROL value (in the table) and the low-byte being the
+        ; fractional part of the two-byte number.
 
-do_not_reset_hills_scroller   
+        ; This first loop does the smooth and coarse scrolling of the bands,
+        ; and then a subsequent block handles resetting each band when it
+        ; reaches the end of its data.
 
-        ; RESET the ROCKS Scroller?
-        lda rck_lms + 1
-        cmp #>[rocks_scroller + 1 ]	; Branch two bytes early, as the line is offset by HSCROL
-        bcc reset_rocks_scroller	; Examine how this yields <= in conjunction with next instruction
-        bne do_not_reset_rocks_scroller	; Examine how this yields <= in conjunciton with previous instruction
+        ; The FINAL block of the parallax band/scrolling is used to update
+        ; the PMG cloud (or clouds, in future), and is a special case.  It must
+        ; be LAST, and must NOT reset the fraction or it will just sit at Pos 0.
 
-        lda rck_lms
-        cmp #<[rocks_scroller + 1]	; Branch two bytes early, as the line is offset by HSCROL
-        bcs do_not_reset_rocks_scroller	; Don't branch if we're not at, or before, the first address (see above)
-
-reset_rocks_scroller
-        mwa #[rocks_scroller_end - 48] rck_lms
-
-do_not_reset_rocks_scroller
-        ; We've skipped resetting the rocks, so continue with the next tasks
-        
-        ; Update the position of the cloud, every 16th frame
-        inc cloud_reducer
-        lda cloud_reducer
-        cmp #$10
-        bne skip_cloud
-        inc cloud_pos	; Move the PMG cloud 1 pixel to the right      
-        lda #$00
-        sta cloud_reducer	
-
-skip_cloud	
-        lda CLOUD_POS
-        sta HPOSP0        
-
-        ldx #$02                ; Last Index into hscrol_fractions + hscrol_delta
+        ldx #$03                ; Last Index into hscrol_fractions + hscrol_delta
 move    lda hscrol_fractions, x ; Get the current fraction
         clc
         adc hscrol_delta, x     ; Add the delta
         sta hscrol_fractions, x ; Store the new fraction
-        lda CLOUD_SCROLL_IDX, x ; Get the current HSCROL position
+        lda sceneryBands, x     ; Get the current HSCROL position
         adc #$00                ; Add the overflow value from the fraction (fraction rolled over)
-        sta CLOUD_SCROLL_IDX, x ; Store the new HSCROL position
-        cmp #$04                ; We're in Mode 4, so 4 color-clocks (scroll values)
+        sta sceneryBands, x     ; Store the new HSCROL position
+        cmp #MAX_HSCROL_MODE4   ; We're in Mode 4, so 4 color-clocks (scroll values)
         bcc nope                ; Done with this band
 
         cpx #$00                ; Coarse scroll the clouds
         bne ck_hill
-        jsr coarse_scroll_cloud
+        jsr CoarseScrollClouds
         bcc next
 
 ck_hill cpx #$01                ; Coarse scroll the hills
-        bne ck_rock
-        jsr coarse_scroll_hill
+        bne ck_shrb
+        jsr CoarseScrollHills
         bcc next
         
-ck_rock cpx #$02
-        bne next
-        jsr coarse_scroll_rock  ; Coarse scroll the rocks
+ck_shrb cpx #$02
+        bne ck_pmg
+        jsr CoarseScrollShrubs  ; Coarse scroll the shrubs
+
+ck_pmg  cpx #$03                ; ALWAYS skip the fraction reset for the PMG 
+        beq nope                ; cloud, we just want its position to increment
 
 next    lda #$00                ; Reset the fraction after a coarse scroll
-        sta CLOUD_SCROLL_IDX, x
+        sta sceneryBands, x
 
 nope    dex                     ; Do the next band
         bpl move
+
+        ; Reset the individual bands after the above smooth and coarse scroll?
+
+        ; Reset the scrolling Cloud band?
+
+        lda cbt_lms + 1             ; We reset if the LMS address for the
+        cmp #>cloud_band_top        ; top of the cloud band is lower than 
+        bcc resetCloudBand          ; the start of the cloud band data ...
+        bne doNotResetCloudBand
+
+        lda cbt_lms                 ; ... allowing for one extra character
+        cmp #<[cloud_band_top + 1]  ; to account for the HSCROL offset
+        bcs doNotResetCloudBand	     
+        
+resetCloudBand
+        ; Reset top and bottom cloud band LMS addresses to one line of data 
+        ; before it's end, so the whole line has data to display.
+        mwa #[cloud_band_top_end - MODE4_HSCROL_LINE_LENGTH] cbt_lms    
+        mwa #[cloud_band_bottom_end - MODE4_HSCROL_LINE_LENGTH ] cbb_lms 
+        
+doNotResetCloudBand
+
+        ; Reset the scrolling Hill band?
+
+        lda hbt_lms + 1           ; We reset if the LMS address for the
+        cmp #>hill_band_top 	  ; top of the hill band is lower than 
+        bcc resetHillBand	  ; the start of the hill band data ...
+        bne doNotResetHillBand	
+
+        lda hbt_lms               ; ... allowing for one extra character
+        cmp #<[hill_band_top + 1] ; to account for the HSCROL offset
+        bcs doNotResetHillBand
+        
+resetHillBand
+        ; Reset top and bottom hill band LMS addresses to one line of data 
+        ; before it's end, so the whole line has data to display.
+        mwa #[hill_band_top_end - MODE4_HSCROL_LINE_LENGTH] hbt_lms
+        mwa #[hill_band_bottom_end - MODE4_HSCROL_LINE_LENGTH ] hsb_lms    
+
+doNotResetHillBand   
+
+        ; Reset the scrolling Shrubs band?
+
+        lda shr_lms + 1         ; We reset if the LMS address for the
+        cmp #>shrub_band	; top of the shrub band is lower than
+        bcc resetShrubBand	; the start of the hill band data ...
+        bne doNotResetShrubBand	
+
+        lda shr_lms
+        cmp #<[shrub_band + 1]	; ... allowing for one extra character
+        bcs doNotResetShrubBand	; to account for the HSCROL offset
+
+resetShrubBand
+        ; Reset the shrub band LMS address to one line of data before its end
+        mwa #[shrub_band_end - MODE4_HSCROL_LINE_LENGTH] shr_lms
+
+doNotResetShrubBand
+        
+        ; Updates the PMG Cloud position, from the fraction value computed
+        ; during the parallel scrolling of the scenery bands.
+        lda cloudPos
+        sta HPOSP0        
 
         ; Done with the VBI, so exit              
 exit_vb	        
@@ -253,77 +291,84 @@ exit_vb
 
 ; Coarse Scrolling Routines for VBI
 
-coarse_scroll_cloud
-        ; To scroll CLOUDS RIGHT, we set the LMS address to a LOWER (LEFT)
-        ; position, resulting in data appearing later on the display line.
+; These routines are all doing coarse RIGHT scrolling, so they set the LMS
+; address to an lower/earlier position in memory, so data appears later on the
+; display line, thus resulting in it moving to the RIGHT.
 
-        sbw cst_lms #$01 ; One byte per coarse scroll in Mode 4
-        sbw csb_lms #$01
-        clc              ; Force branch in our caller
+CoarseScrollClouds        
+        sbw cbt_lms #$01 ; One byte per coarse scroll in Mode 4
+        sbw cbb_lms #$01
+        clc              ; Forces branch in our caller
         rts
 
-coarse_scroll_hill
-        ; To scroll HILLS RIGHT, we set the LMS address to a LOWER (LEFT)
-        ; position, resulting in data appearing later on the display line.
-       
-        sbw hst_lms #$01 ; One byte per coarse scroll in Mode 4
+CoarseScrollHills              
+        sbw hbt_lms #$01 ; One byte per coarse scroll in Mode 4
         sbw hsb_lms #$01
-        clc              ; Force branch in our caller
+        clc              ; Forces branch in our caller
         rts
 
-coarse_scroll_rock
-        ; To scroll ROCKS RIGHT, we set the LMS address to a LOWER (LEFT)
-        ; position, resulting in data appearing later on the display line.
-
-        sbw rck_lms #$01 ; One byte per coarse scroll in Mode 4
-        clc              ; Force branch in our caller
+CoarseScrollShrubs        
+        sbw shr_lms #$01 ; One byte per coarse scroll in Mode 4
+        clc              ; Forces branch in our caller
         rts
 
 ; Display List Interrupt Service Routines
 ;
 ; These are broken out into short, simple, routines, to minimize DLI execution
-; time for any one scan line or mode line.		
+; time for any one scan line or mode line.
 
-dl_set_clouds
-        pha
-        sta WSYNC                         ; Wait for the next scan line
-        SetCharacterSet cloud_chars, TRUE ; Set the character set to the clouds
-        lda CLOUD_SCROLL_IDX	          ; Get the smooth-scroll cloud position	
-        sta HSCROL			  ; Update the HSCROL register
-        ChainDLI dl_background, dl_set_clouds 	  ; Next do the color-update DLI
+; DLI Chain Sequence: dliSetClouds -> dliBackground -> dliHillColors ->
+;                     dliHillScroll -> dliBackgroundLower -> dliShrubScroll ->
+;                     dliSetText -> dliSetColors	
 
-dl_background
+; dliSetClouds - Switches to the scenery character set, sets the HSCROL position
+;                of the cloud parallax band, and chains to the next DLI.
+dliSetClouds
         pha
+        sta WSYNC                            ; Wait for the next scan line
+        SetCharacterSet fntScenery, TRUE     ; Set the character set to the clouds
+        lda cloudBandPos	             ; Get the smooth-scroll cloud position	
+        sta HSCROL			     ; Update the HSCROL register
+        ChainDLI dliBackground, dliSetClouds ; Next do the color-update DLI
+
+; dliBackground - Updates the background color (COLBK) from a table, for several
+;                 scan lines, and then chains to the next DLI.
+
+dliBackground
+        pha ; Save A and X registers
         txa
         pha      
 
-        ldx DLI_TABLE_IDX  ; Get the NEXT color ...
+        ldx colorTableIdx  ; Get the NEXT color ...
         lda color_table, x ; from the table and
         sta WSYNC	   ; wait for the next scan line
         sta COLBK	   ; to update color register	
-        inc DLI_TABLE_IDX  ; Move to NEXT color in table
+        inc colorTableIdx  ; then move to NEXT color in table
     
         cpx #$02           ; Chain next DLI if we're 2 colors into the table
-        bne do_not_chain 
+        bne doNotChainDLI        
         
         ; Done and move to the next DLI 
-        inc DLI_TABLE_IDX  ; Move to the next color in the table, so the next
+
+        inc colorTableIdx  ; Move to the next color in the table, so the next
                            ; table read is correct for the next DLI        
         pla
         tax
-        ChainDLI dl_hill_colors, dl_background
+        ChainDLI dliHillColors, dliBackground ; Next to the hill color DLI
 
-do_not_chain
-        ; Called from several places to exit the DLI
-        
-        ; We're not adjusting the color, nor chaning to the next DLI, so just
-        ; restore the registers and return.
+; doNotChainDLI - This is just a shared DLI-exit routine, called by multiple
+;                 DLIs to restore the A and X registers and RTI.
+doNotChainDLI   
+              
         pla
         tax
         pla
         rti
-          
-dl_hill_colors
+
+; dliHillColors - Updates background and playfield colors for the hill parallax
+;                 band and then chains to next DLI.
+
+dliHillColors
         pha
         lda #COLOR_OLIVE_GREEN | $0C ; Very light olive green
         sta WSYNC
@@ -332,36 +377,46 @@ dl_hill_colors
         sta COLPF0
         lda #COLOR_RED_ORANGE | $04  ; Dark red orange
         sta COLPF1
-        ChainDLI dl_hill_scroll, dl_hill_colors
+        ChainDLI dliHillScroll, dliHillColors ; Next do the hill scrolling DLI
 
-dl_hill_scroll
+; dliHillScroll - Updates the HSCROL position of the hill parallax band and then
+;                 chains to the next DLI.  This happens separately from 
+;                 dliHillColors to ensure it finishes in one scane line.
+
+dliHillScroll
         pha        
-        lda HILL_SCROLL_IDX ; Get the smooth-scroll hill position ...
-        sta WSYNC
-        sta HSCROL	    ; ... and update the HSCROL register
-        ChainDLI dl_background_lower, dl_hill_scroll
+        lda hillBandPos ; Get the smooth-scroll hill position ...
+        sta WSYNC       ; let the scanline finish to avoid flicker ...
+        sta HSCROL	; ... and then update the HSCROL register
+        ChainDLI dliBackgroundLower, dliHillScroll ; Do lower background color DLI
 
-dl_background_lower
+; dliBackgroundLower - Updates the lower area background color (COLBK) from a
+;                      table, for several scan lines, and then chains to the
+;                      next DLI.
+
+dliBackgroundLower
         pha
         txa
         pha      
         
-        ldx DLI_TABLE_IDX  ; Get the NEXT color ...
+        ldx colorTableIdx  ; Get the NEXT color ...
         lda color_table, x ; from the table and
         sta WSYNC	   ; wait for the next scan line
         sta COLBK	   ; to update color register               
-        inc DLI_TABLE_IDX  ; Move to NEXT color in table
-        cpx #$06           ; Chain next DLI if we're 8 colors into the table
-        bne do_not_chain   ; Exit the DLI without chaining, using an the same
-                           ; routine as dl_background does (see above) 
+        inc colorTableIdx  ; Move to NEXT color in table
+        cpx #$06           ; Chain next DLI if we're 6 colors into the table
+        bne doNotChainDLI  ; Exit the DLI without chaining
         
-         ; Done and move to the next DLI
+         ; Done and chain to the next DLI
         pla
-        tax
-        ;ChainDLI dl_set_chars, dl_background_lower
-        ChainDLI dl_rock_scroll, dl_background_lower
+        tax        
+        ChainDLI dliShrubScroll, dliBackgroundLower ; Next do the shrub scrolling DLI
 
-dl_rock_scroll
+; dliShrubScroll - Updates the HSCROL position of the shrub parallax band,
+;                  resets the colors for the shrubs and background, and then
+;                  chains to the next DLI.
+
+dliShrubScroll
         pha
         lda #COLOR_OLIVE_GREEN | $04  ; Dark olive green - brown
         sta COLPF0
@@ -370,59 +425,72 @@ dl_rock_scroll
         lda color_table + 7
         sta WSYNC
         sta COLBK
-        lda ROCK_SCROLL_IDX	      ; Get the smooth-scroll rock position ...
-        sta WSYNC
-        sta HSCROL	              ; ... and update the HSCROL register
-        ChainDLI dl_set_chars, dl_rock_scroll
+        lda shrubBandPos	      ; Get the smooth-scroll rock position ...
+        sta WSYNC                     ; ... and let the scanline finish ...
+        sta HSCROL	              ; ... then update the HSCROL register
+        ChainDLI dliSetText, dliShrubScroll ; Chain to text scrolling DLI
 
-dl_set_chars	
+; dliSetText - Switches to the text font, resets the backgrond color, and then
+;              chains to the next DLI.
+
+dliSetText	
         pha       
-        sta WSYNC                            ; Wait for scan line to finish to
-                                             ; avoid corrupting rocks display
-        lda color_table + 8                  ; Set the background color for the
-        sta COLBK                            ; last rost of the scrolling area
-        SetCharacterSet charset, TRUE        ; Set character set to the text set
-        ChainDLI dl_set_colors, dl_set_chars ; Next do the fixed colors DLI
+        sta WSYNC                         ; Wait for scan line to finish to
+                                          ; avoid corrupting shrubs display
+        lda color_table + 8               ; Set the background color for the
+        sta COLBK                         ; last row of the scrolling area
+        SetCharacterSet fntText, TRUE     ; Set character set to the text set
+        ChainDLI dliSetColors, dliSetText ; Next do the fixed colors DLI
 
-dl_set_colors	
+; dliSetColors - Sets the final fixed colors for the text area of the screen
+;              - and sets the HSCROL position for the text scroller.
+
+dliSetColors	
         pha
         lda #COLOR_RED_ORANGE | $06 ; Medium red orange	
         sta COLPF0                  ; Set background color remainder of screen
         lda #COLOR_RED | $06        ; Medium red
-        sta COLPF1                  ; Set  text color for remainder of screen
+        sta COLPF1                  ; Set text color for remainder of screen
         
-        lda  TEXT_SCROLL_IDX	; Get the smooth-scroll text position ...
-        sta  HSCROL		; ... and update the HSCROL register; scrolls
-                                ; in the opposite direction of clouds/scenery.
+        lda  textHSCROLPos ; Get the smooth-scroll text position ...
+        sta  HSCROL	   ; ... and update the HSCROL register; scrolls
+                           ; in the opposite direction of clouds/scenery.
         pla
         rti
 
 END:	
         run start
                                 
-; Macro Built Title Display List
-title_display_list
-        DL_TOP_OVERSCAN
-        DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line  ; Change to Clouds Character Set
+; Display list for Title Screen
+
+; This is a fairly complex display list, with multiple, chained, DLIs and
+; multiple LMS regions, supporting color changes and multiple scrolling regions.
+
+; NOTE: DLIs execute on the LAST scan line of the mode line they're set on, so 
+; they affect subsequent mode lines, not the one they're defined/called on.
+
+dlTitle
+        DL_TOP_OVERSCAN                                                     ; 24 blank lines
+        DL_LMS_MODE_ADDR [DL_TEXT_7 | DL_DLI], first_line                   ; dliSetClouds
         DL_BLANK_LINES	 2
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]		   ; Change Background Color
-        DL_MODE		 [DL_TEXT_4 | DL_DLI]	
-        DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-cst_lms	DL_LMS_ADDR	 [cloud_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
-        DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-csb_lms	DL_LMS_ADDR	 [cloud_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars
-        DL_BLANK         DL_BLANK_2, TRUE                  ; Updates HSCROL for the HILLS; needs 2 blank lines or ANITC gets upset.
-        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-hst_lms DL_LMS_ADDR	 [hills_scroller_top_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars 
-        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]
-hsb_lms DL_LMS_ADDR	 [hills_scroller_bottom_end - 48]  ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars  
-        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], blank_text      
-        DL_MODE		 [DL_TEXT_4 | DL_DLI] 
-        DL_BLANK         DL_BLANK_1, TRUE                  ; Updates HSCROL for the ROCKS
-        DL_BLANK	 DL_BLANK_2                        ; Needed for Atari800 emulator to stop HSCROL glitching
-        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL] ; Switches character set (remember it occurs AFTER the line)
-rck_lms DL_LMS_ADDR      [rocks_scroller_end - 48]	   ; Scrolling LEFT to RIGHT, so start at END of data - 1 line of chars         	   
-        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], status_text ; Set Final Colors
+        DL_MODE		 [DL_TEXT_4 | DL_DLI]		                    ; dliBackground
+        DL_MODE		 [DL_TEXT_4 | DL_DLI]	                            ; dliBackground
+        DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliBackground
+cbt_lms	DL_LMS_ADDR	 [cloud_band_top_end - MODE4_HSCROL_LINE_LENGTH]    ; Top of cloud band
+        DL_LMS_MODE	 [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliHillColors
+cbb_lms	DL_LMS_ADDR	 [cloud_band_bottom_end - MODE4_HSCROL_LINE_LENGTH] ; Bottom of cloud band
+        DL_BLANK         DL_BLANK_2, TRUE                                   ; dliHillScroll (2 blank lines needed to let DLI finish)
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliBackgroundLower
+hbt_lms DL_LMS_ADDR	 [hill_band_top_end - MODE4_HSCROL_LINE_LENGTH]	    ; Top of hill band 
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliBackgroundLower
+hsb_lms DL_LMS_ADDR	 [hill_band_bottom_end - MODE4_HSCROL_LINE_LENGTH]  ; Bottom of hill band
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], blank_text                   ; dliBackgroundLower
+        DL_MODE		 [DL_TEXT_4 | DL_DLI]                               ; dliBackgroundLower
+        DL_BLANK         DL_BLANK_1, TRUE                                   ; dliShrubScroll (1 blank line needed to let DLI finish)
+        DL_BLANK	 DL_BLANK_2                                         ; Needed for Atari800 emulator to stop HSCROL glitching
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliSetText
+shr_lms DL_LMS_ADDR      [shrub_band_end - MODE4_HSCROL_LINE_LENGTH]	    ; Shrub band
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], status_text                  ; dliSetColors
         DL_MODE		 DL_TEXT_6
         DL_MODE		 DL_TEXT_6
         DL_MODE		 DL_TEXT_6
@@ -430,17 +498,19 @@ rck_lms DL_LMS_ADDR      [rocks_scroller_end - 48]	   ; Scrolling LEFT to RIGHT,
         DL_BLANK_LINES	 8		
         DL_MODE		 DL_TEXT_2
         DL_BLANK_LINES 	 8
-        DL_LMS_MODE	 [DL_TEXT_7 | DL_HSCROLL]
-scroll_lms
-        DL_LMS_ADDR	 scroll_line
+        DL_LMS_MODE	 [DL_TEXT_7 | DL_HSCROLL]                           ; Text Scroller
+scroll_lms                                                      
+        DL_LMS_ADDR	 scroll_text                                        ; Start of text scroller
         DL_BLANK_LINES	 8
         DL_BLANK_LINES 	 8	
-        DL_JVB		 title_display_list
+        DL_JVB		 dlTitle                                            ; Back to top of display list
 
 ; Data for the Title Screen
 
         .align BOUNDARY_4K ; Align to a 1KB boundary, so we don't cross a 4K
                            ; boundary and get ANTIC all upset.
+
+; Text for the text lines in the main display.
 
 first_line
         dta d'THE: WOEBEGONE TRAIL'*       	
@@ -456,7 +526,10 @@ status_text
         dta d':'
         dta d'SNAKE RIVER'*
         dta d'   Press [START] to Die of Dysentery.   '*
-scroll_line
+
+; Text for the Text Scroller
+
+scroll_text
         dta d'                      WELCOME TO '
         dta d'THE WOEBEGONE TRAIL'*
         dta d' ... A MODERN HOMAGE TO '
@@ -474,59 +547,130 @@ scroll_line
         dta d'" (damieng.com/typography)'
         dta d' .......... press ['
         dta d'START'*
-        dta d'] to die of dysentery.'	
-blank_line
-        dta d'                                        '
-        dta d'                                        '
+        dta d'] to die of dysentery.'        
+scroll_text_end
+        dta d'                      ' ; Blank buffer to stop spurious data
+                                      ; showing at end of text scroller.
 
-; Two blocks of MODE 4 characters for the CLOUDS
-cloud_scroller_top
-        .HE 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57
-cloud_scroller_top_end
-cloud_scroller_bottom		
-        .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
-cloud_scroller_bottom_end
+; Data (Character/Tile Maps) for the Parallax Scenery Bands
 
-; Two blocks of MODE 4 characters for the HILLS
-hills_scroller_top        
-        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
-hills_scroller_top_end
-hills_scroller_bottom     
-        .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 23 25 26 03 01 02 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 02 25 26 03 11 12
-hills_scroller_bottom_end
+; Each full, normal-width, smooth-scroll-enabled mode line is 48 ($30) bytes
+; long.  For seamless wrap-around scrolling the LAST 48 bytes of each line MUST
+; be the same as the FIRST 48 bytes of the line (so when an LMS address reset
+; occurs, it is showing the same data).
+;
+; For bands wider than one screen width, the data between the first and last
+; blocks of 48 bytes does NOT need to repeat at all.
+;
+; The data for each band is in two parts: the top and bottom of the band.  They
+; are the same length.  Each mode line has an independent LMS address, so the
+; bands must be separate or one would scroll up into the prior one.
 
-; One block of MODE 4 characters for the ROCKS
-rocks_scroller       
-        .HE 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64
-rocks_scroller_end
+; Data is the internal character index into the character set, so is effectively
+; a character or "tile" map.
+
+; .HE lines are 24 bytes/characters long, so two .HE statements constitute one full
+; MODE 4 line.
+
+; Cloud Parallax Band Data
+
+cloud_band_top
+        ; These two lines must match the last two lines of the band.
+        .HE 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00
+        .HE 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57
+
+        ; More data can live here, and does not need to be duplicated.
+
+        ; These two lines must match the first two lines of the band.
+        .HE 00 00 00 00 00 00 00 00 00 00 00 41 00 00 00 42 43 00 00 00 00 47 00 00
+        .HE 00 4B 4C 00 00 00 58 59 00 00 4F 00 00 00 00 00 00 00 00 00 00 55 56 57
+cloud_band_top_end
+
+cloud_band_bottom	
+        ; These two lines must match the last two lines of the band.
+        .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69
+        .HE 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77
+
+        ; More data can live here, and does not need to be duplicated.
+
+        ; These two lines must match the first two lines of the band.
+        .HE 00 00 00 00 00 00 00 00 00 00 60 61 62 63 00 00 00 00 64 65 66 67 68 69
+        .HE 6A 6B 6C 6D 00 00 00 00 00 6E 6F 70 71 72 73 74 00 00 00 00 00 75 76 77 
+cloud_band_bottom_end
+
+; Hill Parallax Band Data
+
+hill_band_top
+        ; These two lines must match the last two lines of the band.        
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00
+        .HE 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00
+
+        ; More data can live here, and does not need to be duplicated.
+
+        ; These two lines must match the first two lines of the band.
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 09 0A 0B 00 00 00
+        .HE 00 00 00 00 00 0D 0E 0F 08 09 0A 0B 0D 0E 0B 00 00 00 00 00 00 00 00 00        
+hill_band_top_end
+
+hill_band_bottom  
+        ; These two lines must match the last two lines of the band.  
+        .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01
+        .HE 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 23 25 26 03 01 02
+        
+        ; More data can live here, and does not need to be duplicated.
+
+        ; These two lines must match the first two lines of the band.
+        .HE 23 24 25 26 01 02 03 04 05 06 21 22 23 24 25 26 27 28 29 2A 2B 2C 21 01
+        .HE 22 23 24 25 06 2D 2E 2F 28 29 2A 2B 2D 2E 2A 21 22 01 02 25 26 03 11 12
+hill_band_bottom_end
+
+; Shrubs Parallax Band Data
+shrub_band       
+        ; These two lines must match the last two lines of the band.  
+        .HE 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F
+        .HE 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64
+
+        ; More data can live here, and does not need to be duplicated.
+
+        ; These two lines must match the first two lines of the band.
+        .HE 00 00 05 03 04 00 00 00 21 22 23 00 00 00 00 05 02 03 04 00 00 00 00 3F
+        .HE 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64
+shrub_band_end
 
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
         .byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
 
-hscrol_fractions        
-        .byte   $00, $00, $00
-; How fast each band scrolls - Lower is Slower; First value is the clouds.
-hscrol_delta
-        .byte   $4, $10, $40
+; Tables for Parallax Scrolling Fractions and Speeds, in the order:
+; Cloud Band, Hills Band, Shrubs Bound, PMG Cloud(s)
 
-; Character SETs ... first for the text ...	
+; Temporary space for the fractional part of the HSCROL position calculations
+hscrol_fractions        
+        .byte   $00, $00, $00, $00
+
+; How fast each band scrolls as a fraction of frame Hz/256; Lower is Slower;
+hscrol_delta
+        .byte   $04, $10, $40, $08
+
+; Character SETs ... first for the text ...
+
         AlignCharacterSet
-charset
+fntText
         ins '../fonts/high_noon.fnt'
                 
-; ... and then for the cloud and terrain graphics ...
+; ... and then for the cloud and scenery graphics ...
+
         .align PMBASE_BOUNDARY ; PMBASE_BOUNDARY is a 2KB boundary,
                                ; which is also a 1KB boundary, so works
                                ; for character sets.
 
 pm_graphics	; This puts a character set in the first, unused, 1KB of PMBASE 
-cloud_chars     ; so we're not wasting that area.
+fntScenery      ; so we're not wasting that area.
         ins '../fonts/scenery.fnt'				
                 
         ; The inserted character set is 1024 bytes, so here org is at
         ; PMBASE + $400, ready for the first Player data.
-        org *+69	;SKip on 64 bytes
+        org *+69	; Offset so cloud is visible, vertically, on screen
 
         ; "Ugly Cloud"
         .byte %00100000
@@ -542,7 +686,7 @@ cloud_chars     ; so we're not wasting that area.
         .byte %11001100
         
         ; "Sun"	
-        org *+236
+        org *+236       ; Skip the rest of player 0 offset, vertically.
         .byte %00011000
         .byte %00111100
         .byte %01111110
