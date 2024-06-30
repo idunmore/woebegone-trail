@@ -82,13 +82,15 @@ start
         lda #$00
         sta HPOSP0
         
-        ; Sun - Player 1
+        ; Sun - Player 2 - We use Player 2 here, so GPRIOR allows for playfield
+        ;                  objects/colors and PMG 0 & 2 to appear in FRONT of us
+
         lda #COLOR_ORANGE_GREEN | $0F ; Lightest orange green - YELLOW
-        sta PCOLOR1
+        sta PCOLOR2
         lda #PM_SIZE_NORMAL
-        sta SIZEP1
+        sta SIZEP2
         lda #$B0
-        sta HPOSP1
+        sta HPOSP2
 
         ; Enable and Display PMGs - Maintaining necessary settings for SDMCTL
         lda #ENABLE_PLAYERS
@@ -686,7 +688,9 @@ fntScenery      ; so we're not wasting that area.
         .byte %11001100
         
         ; "Sun"	
-        org *+236       ; Skip the rest of player 0 offset, vertically.
+        org *+492       ; Skip the rest of player 0 and 1, to render this as
+                        ; Player 2 (to allow GPRIOR to render sun behind clouds)
+                        ; and offset vertically.
         .byte %00011000
         .byte %00111100
         .byte %01111110
