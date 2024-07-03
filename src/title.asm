@@ -117,8 +117,17 @@ start
 
 loopForever	
         inc colorFlowCurrentLine ; Increment color for Color Flow
-        lda colorFlowCurrentLine ; Get that color
-        sta WSYNC	         ; Wait for horizontal retrace
+        
+        lda VCOUNT               ; We only want to apply the color flow colors
+        cmp #$1A                 ; in the top and bottom areas of the screen ...
+        bcc flow                 ; Update COLPF2 if before scan line 26 ...
+        beq flow
+        lda VCOUNT
+        cmp #$40
+        bcc loopForever          ; ... or after scanline 64
+flow
+        lda colorFlowCurrentLine ; Get current scan line color        
+        sta WSYNC      	         ; Wait for horizontal retrace
         sta COLPF2	         ; Set the hardware color register directly 	 
         jmp loopForever
 
@@ -320,8 +329,10 @@ CoarseScrollShrubs
 ; time for any one scan line or mode line.
 
 ; DLI Chain Sequence: dliSetClouds -> dliBackground -> dliHillColors ->
-;                     dliHillScroll -> dliBackgroundLower -> dliShrubScroll ->
-;                     dliSetText -> dliSetColors	
+;                     dliHillScroll -> dliPlainsColor1 -> 
+;                     dliWagonColorsAndChars -> dliPlainsColor2 ->
+;                     dliBackgroundLower -> dliShrubColorsAndChars ->
+;                     dliShrubScroll -> dliSetText -> dliTextSetColors	
 
 ; dliSetClouds - Switches to the scenery character set, sets the HSCROL position
 ;                of the cloud parallax band, and chains to the next DLI.
@@ -348,24 +359,16 @@ dliBackground
         inc colorTableIdx  ; then move to NEXT color in table
     
         cpx #$02           ; Chain next DLI if we're 2 colors into the table
-        bne doNotChainDLI        
+        beq doChainDLI
+        jmp doNotChainDLI     
         
         ; Done and move to the next DLI 
-
+doChainDLI
         inc colorTableIdx  ; Move to the next color in the table, so the next
                            ; table read is correct for the next DLI        
         pla
         tax
         ChainDLI dliHillColors, dliBackground ; Next to the hill color DLI
-
-; doNotChainDLI - This is just a shared DLI-exit routine, called by multiple
-;                 DLIs to restore the A and X registers and RTI.
-doNotChainDLI   
-              
-        pla
-        tax
-        pla
-        rti
 
 ; dliHillColors - Updates background and playfield colors for the hill parallax
 ;                 band and then chains to next DLI.
@@ -390,7 +393,47 @@ dliHillScroll
         lda hillBandPos ; Get the smooth-scroll hill position ...
         sta WSYNC       ; let the scanline finish to avoid flicker ...
         sta HSCROL	; ... and then update the HSCROL register
-        ChainDLI dliBackgroundLower, dliHillScroll ; Do lower background color DLI
+        ChainDLI dliPlainsColor1, dliHillScroll
+
+; dliPlainsColor1 - Sets the background color for the first line of the plains
+
+dliPlainsColor1
+        pha
+        lda color_table + 4
+        sta WSYNC
+        sta COLBK               
+        ChainDLI dliWagonColorsAndChars, dliPlainsColor1
+
+; dliWagonColorsAndChars - Sets the colors for the wagon/oxen, switches to their
+;                          character set, and chains to the next DLI
+
+dliWagonColorsAndChars
+        pha
+        lda color_table + 5
+        sta WSYNC
+        sta COLBK        
+        SetCharacterSet fntWagon, TRUE 
+        lda #$42
+        sta COLPF0
+        lda #$06
+        sta COLPF1
+        lda #$0E
+        sta COLPF2
+        lda #$3A
+        sta COLPF3                 
+        ChainDLI dliPlainsColor2, dliWagonColorsAndChars
+
+; dliPlainsColor2 - Sets the next background color for the plains
+
+dliPlainsColor2
+        pha        
+        lda color_table + 6
+        sta WSYNC
+        sta COLBK
+        inc colorTableIdx   ; Skip the next three colors in the table.
+        inc colorTableIdx   
+        inc colorTableIdx      
+        ChainDLI dliBackgroundLower, dliPlainsColor2
 
 ; dliBackgroundLower - Updates the lower area background color (COLBK) from a
 ;                      table, for several scan lines, and then chains to the
@@ -406,27 +449,41 @@ dliBackgroundLower
         sta WSYNC	   ; wait for the next scan line
         sta COLBK	   ; to update color register               
         inc colorTableIdx  ; Move to NEXT color in table
-        cpx #$06           ; Chain next DLI if we're 6 colors into the table
+        cpx #$08           ; Chain next DLI if we're 6 colors into the table
         bne doNotChainDLI  ; Exit the DLI without chaining
         
-         ; Done and chain to the next DLI
+         ; Done and chain to the next DLI        
         pla
         tax        
-        ChainDLI dliShrubScroll, dliBackgroundLower ; Next do the shrub scrolling DLI
+        ChainDLI dliShrubColorsAndChars, dliBackgroundLower ; Next do the shrub scrolling DLI
+
+; doNotChainDLI - This is just a shared DLI-exit routine, called by multiple
+;                 DLIs to restore the A and X registers and RTI.
+doNotChainDLI   
+              
+        pla
+        tax
+        pla
+        rti
+
+dliShrubColorsAndChars
+        pha
+        lda #COLOR_OLIVE_GREEN | $04  ; Dark olive green - brown
+        sta COLPF0
+        lda #COLOR_MEDIUM_GREEN | $06 ; Medium green - brown
+        sta COLPF1
+        lda color_table + 9
+        sta WSYNC
+        sta COLBK
+        SetCharacterSet fntScenery, TRUE        
+        ChainDlI dliShrubScroll, dliShrubColorsAndChars
 
 ; dliShrubScroll - Updates the HSCROL position of the shrub parallax band,
 ;                  resets the colors for the shrubs and background, and then
 ;                  chains to the next DLI.
 
 dliShrubScroll
-        pha
-        lda #COLOR_OLIVE_GREEN | $04  ; Dark olive green - brown
-        sta COLPF0
-        lda #COLOR_MEDIUM_GREEN | $06 ; Medium green - brown
-        sta COLPF1
-        lda color_table + 7
-        sta WSYNC
-        sta COLBK
+        pha       
         lda shrubBandPos	      ; Get the smooth-scroll rock position ...
         sta WSYNC                     ; ... and let the scanline finish ...
         sta HSCROL	              ; ... then update the HSCROL register
@@ -437,17 +494,17 @@ dliShrubScroll
 
 dliSetText	
         pha       
-        sta WSYNC                         ; Wait for scan line to finish to
-                                          ; avoid corrupting shrubs display
-        lda color_table + 8               ; Set the background color for the
-        sta COLBK                         ; last row of the scrolling area
-        SetCharacterSet fntText, TRUE     ; Set character set to the text set
-        ChainDLI dliSetColors, dliSetText ; Next do the fixed colors DLI
+        sta WSYNC                     ; Wait for scan line to finish to
+                                      ; avoid corrupting shrubs display
+        lda color_table + 10          ; Set the background color for the
+        sta COLBK                     ; last row of the scrolling area
+        SetCharacterSet fntText, TRUE ; Set character set to the text set
+        ChainDLI dliSetTextColors, dliSetText ; Next do the fixed colors DLI
 
-; dliSetColors - Sets the final fixed colors for the text area of the screen
-;              - and sets the HSCROL position for the text scroller.
+; dliSetTextColors - Sets the final fixed colors for the text area of the screen
+;                    and sets the HSCROL position for the text scroller.
 
-dliSetColors	
+dliSetTextColors	
         pha
         lda #COLOR_RED_ORANGE | $06 ; Medium red orange	
         sta COLPF0                  ; Set background color remainder of screen
@@ -484,14 +541,17 @@ cbb_lms	DL_LMS_ADDR	 [cloud_band_bottom_end - MODE4_HSCROL_LINE_LENGTH] ; Bottom
         DL_BLANK         DL_BLANK_2, TRUE                                   ; dliHillScroll (2 blank lines needed to let DLI finish)
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliBackgroundLower
 hbt_lms DL_LMS_ADDR	 [hill_band_top_end - MODE4_HSCROL_LINE_LENGTH]	    ; Top of hill band 
-        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliBackgroundLower
+        DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                           ; dliBackgroundLower
 hsb_lms DL_LMS_ADDR	 [hill_band_bottom_end - MODE4_HSCROL_LINE_LENGTH]  ; Bottom of hill band
-        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], blank_text                   ; dliBackgroundLower
+        DL_BLANK         DL_BLANK_1
+        DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], oxen_band                    ; dliBackgroundLower              
         DL_MODE		 [DL_TEXT_4 | DL_DLI]                               ; dliBackgroundLower
+        DL_MODE          [DL_TEXT_4 | DL_DLI]      
+        DL_MODE          [DL_TEXT_4 | DL_DLI]
         DL_BLANK         DL_BLANK_1, TRUE                                   ; dliShrubScroll (1 blank line needed to let DLI finish)
         DL_BLANK	 DL_BLANK_2                                         ; Needed for Atari800 emulator to stop HSCROL glitching
         DL_LMS_MODE      [DL_TEXT_4 | DL_DLI | DL_HSCROLL]                  ; dliSetText
-shr_lms DL_LMS_ADDR      [shrub_band_end - MODE4_HSCROL_LINE_LENGTH]	    ; Shrub band
+shr_lms DL_LMS_ADDR      [shrub_band_end - MODE4_HSCROL_LINE_LENGTH]	    ; Shrub band   
         DL_LMS_MODE_ADDR [DL_TEXT_4 | DL_DLI], status_text                  ; dliSetColors
         DL_MODE		 DL_TEXT_6
         DL_MODE		 DL_TEXT_6
@@ -544,7 +604,10 @@ scroll_text
         dta d' equates/includes & macros inspired by (and some code from)'
         dta d" KEN JENNINGS"*
         dta d' (github.com/kenjennings/atari-mads-includes) ...'
-        dta d' font BY "'        
+        dta d' oxen and wagon graphics by "'
+        dta d'MR. FISH'*
+        dta d'" ...'
+        dta d' font by "'        
         dta d'DAMIENG'*
         dta d'" (damieng.com/typography)'
         dta d' .......... press ['
@@ -639,9 +702,24 @@ shrub_band
         .HE 00 00 00 78 00 00 00 00 00 00 08 09 0A 0B 00 00 00 00 00 00 00 00 63 64
 shrub_band_end
 
+; Temporary .HE lines are 20 bytes/characters long, as we're not enabling HSCROL
+; for the oxen/wagonband yet, so two .HE statements constitute one full 40 byte
+; MODE 4 line.
+oxen_band
+        ; -------------------------------------------------------------
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+        .HE 00 00 00 00 00 00 01 02 03 04 05 06 07 08 09 0A 0B 00 00 00
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+        .HE 00 00 00 00 00 00 21 22 23 24 25 26 27 28 29 2A 2B 00 00 00
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+        .HE 00 00 00 00 00 00 41 42 43 44 45 C6 C7 C8 C9 CA CB 00 00 00
+        .HE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+        .HE 00 00 00 00 00 00 61 62 63 64 65 E6 E7 E8 E9 EA EB 00 00 00
+oxen_band_end
+
 ; Colors for the BACKGROUND in main cloud/scenery area		
 color_table
-        .byte	$75, $87, $9A, $BC, $BA, $B7, $E7, $F5, $F3
+        .byte	$75, $87, $9A, $BC, $BA, $B2, $B4, $B6, $E7, $F5, $F3
 
 ; Tables for Parallax Scrolling Fractions and Speeds, in the order:
 ; Cloud Band, Hills Band, Shrubs Bound, PMG Cloud(s)
@@ -659,6 +737,10 @@ hscrol_delta
         AlignCharacterSet
 fntText
         ins '../fonts/high_noon.fnt'
+
+; ... then for the oxen, wagon and landmarks
+fntWagon
+        ins '../fonts/wagon.fnt'
                 
 ; ... and then for the cloud and scenery graphics ...
 
